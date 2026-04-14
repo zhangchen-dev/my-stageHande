@@ -31,7 +31,8 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # env files (can opt-in for committing if needed)
-.env*
+.env*.local
+.env.local.*
 
 # vercel
 .vercel
@@ -40,3 +41,30 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 .history
+
+# ============ 项目运行时生成文件 ============
+
+# 日志文件
+logs/
+*.log
+
+# Stagehand 缓存
+.stagehand-cache/
+
+# Playwright CLI 临时文件
+.playwright-cli/
+
+# 测试输出（截图、报告）
+test-output/
+test-result.log
+
+# IDE / 编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 系统文件
+Thumbs.db
+Desktop.ini
