@@ -62,12 +62,13 @@ export async function POST(req: NextRequest) {
         stagehand = new Stagehand({
           env: 'LOCAL',
           model: {
-            modelName: "gpt-4o",  // 使用 aiSDK 支持的模型名格式
+            modelName: "gpt-4o",
             apiKey: apiKey,
             baseURL: baseURL,
           },
           cacheDir: PATHS.CACHE,
           verbose: 1,
+          domSettleTimeout: 5000,
           localBrowserLaunchOptions: {
             headless: !useHeadful,
             viewport: { width: 1920, height: 1080 },
@@ -166,8 +167,8 @@ export async function POST(req: NextRequest) {
               }
             }
 
-            // 步骤间等待
-            await new Promise(resolve => setTimeout(resolve, 500))
+            // 步骤间短暂缓冲
+            await new Promise(resolve => setTimeout(resolve, 300))
           } catch (stepError) {
             const errorRecord: StepExecutionRecord = {
               stepId: step.id,

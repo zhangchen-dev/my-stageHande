@@ -1,6 +1,6 @@
 // ==================== 操作类型 ====================
 
-export type TestStepType = 'goto' | 'click' | 'fill' | 'hover' | 'screenshot' | 'wait' | 'scroll' | 'clear' | 'js' | 'followGuide'
+export type TestStepType = 'goto' | 'click' | 'fill' | 'hover' | 'screenshot' | 'wait' | 'scroll' | 'clear' | 'js' | 'followGuide' | 'condition'
 
 // ==================== 元素选择器配置 ====================
 
@@ -155,6 +155,31 @@ export interface TestResult {
     viewport: string
     headless: boolean
   }
+}
+
+// ==================== 条件判断步骤 ====================
+
+/**
+ * 条件类型
+ */
+export type ConditionType = 'elementExists' | 'elementVisible' | 'textMatch' | 'attributeMatch'
+
+/**
+ * 条件配置
+ */
+export interface ConditionConfig {
+  type: ConditionType
+  selector: ElementSelector
+  value?: string // 用于文本匹配或属性匹配
+}
+
+/**
+ * 条件判断步骤
+ */
+export interface ConditionStep extends TestStep {
+  condition: ConditionConfig
+  thenSteps: TestStep[] // 条件满足时执行的步骤
+  elseSteps?: TestStep[] // 条件不满足时执行的步骤（可选）
 }
 
 // ==================== 日志条目 ====================

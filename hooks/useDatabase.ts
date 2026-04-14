@@ -3,9 +3,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { TestTask, TestResult, TestStep, ExecutionRecord } from '@/types'
 
-// IndexedDB 数据库名称和版本
 const DB_NAME = 'StagehandTestDB'
-const DB_VERSION = 1
+const DB_VERSION = 2
 
 interface DBSchema {
   tasks: TestTask
@@ -13,49 +12,80 @@ interface DBSchema {
   executionRecords: ExecutionRecord & { taskId: string }
 }
 
+let dbInstance: IDBDatabase | null = null
+let dbInitPromise: Promise<IDBDatabase> | null = null
+let dbClosed = false
+
 function openDB(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
+  if (dbInstance && !dbClosed) {
+    return Promise.resolve(dbInstance)
+  }
+  
+  if (dbInitPromise) {
+    return dbInitPromise
+  }
+  
+  dbInitPromise = new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION)
     
-    request.onerror = () => reject(request.error)
-    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => {
+      dbInitPromise = null
+      reject(request.error)
+    }
+    
+    request.onsuccess = () => {
+      dbInstance = request.result
+      dbInitPromise = null
+      dbClosed = false
+      
+      dbInstance.onclose = () => {
+        dbInstance = null
+        dbClosed = true
+      }
+      dbInstance.onerror = () => {
+        dbInstance = null
+        dbClosed = true
+      }
+      
+      resolve(dbInstance)
+    }
     
     request.onupgradeneeded = (event) => {
       const db = (event.target as IDBOpenDBRequest).result
-      
-      // 创建任务存储
-      if (!db.objectStoreNames.contains('tasks')) {
-        const taskStore = db.createObjectStore('tasks', { keyPath: 'id' })
-        taskStore.createIndex('name', 'name', { unique: false })
-        taskStore.createIndex('createdAt', 'createdAt', { unique: false })
-        taskStore.createIndex('status', 'status', { unique: false })
+      const oldVersion = event.oldVersion
+
+      if (oldVersion < 2) {
+        if (db.objectStoreNames.contains('tasks')) db.deleteObjectStore('tasks')
+        if (db.objectStoreNames.contains('results')) db.deleteObjectStore('results')
+        if (db.objectStoreNames.contains('executionRecords')) db.deleteObjectStore('executionRecords')
       }
       
-      // 创建执行结果存储
-      if (!db.objectStoreNames.contains('results')) {
-        const resultStore = db.createObjectStore('results', { keyPath: 'id' })
-        resultStore.createIndex('taskId', 'taskId', { unique: false })
-        resultStore.createIndex('executedAt', 'executedAt', { unique: false })
-      }
+      const taskStore = db.createObjectStore('tasks', { keyPath: 'id' })
+      taskStore.createIndex('name', 'name', { unique: false })
+      taskStore.createIndex('createdAt', 'createdAt', { unique: false })
+      taskStore.createIndex('status', 'status', { unique: false })
       
-      // 创建执行记录存储
-      if (!db.objectStoreNames.contains('executionRecords')) {
-        const recordStore = db.createObjectStore('executionRecords', { keyPath: 'id', autoIncrement: true })
-        recordStore.createIndex('taskId', 'taskId', { unique: false })
-      }
+      const resultStore = db.createObjectStore('results', { keyPath: 'id' })
+      resultStore.createIndex('taskId', 'taskId', { unique: false })
+      resultStore.createIndex('executedAt', 'executedAt', { unique: false })
+      
+      const recordStore = db.createObjectStore('executionRecords', { keyPath: 'id', autoIncrement: true })
+      recordStore.createIndex('taskId', 'taskId', { unique: false })
     }
   })
+  
+  return dbInitPromise
 }
 
 function transaction<T>(
   storeName: string, 
   mode: IDBTransactionMode
-): Promise<[IDBDatabase, IDBObjectStore]> {
+): Promise<IDBObjectStore> {
   return new Promise((resolve, reject) => {
     openDB().then(db => {
       const transaction = db.transaction(storeName, mode)
       const store = transaction.objectStore(storeName)
-      resolve([db, store])
+      resolve(store)
     }).catch(reject)
   })
 }
@@ -70,16 +100,14 @@ export function useDatabase() {
   const [results, setResults] = useState<Map<string, TestResult[]>>(new Map())
   const [isLoading, setIsLoading] = useState(true)
 
-  // 加载所有任务
   const loadTasks = useCallback(async () => {
     try {
-      const [, store] = await transaction('tasks', 'readonly')
+      const store = await transaction('tasks', 'readonly')
       const request = store.getAll()
       
       return new Promise<TestTask[]>((resolve, reject) => {
         request.onsuccess = () => {
           const allTasks = (request.result as TestTask[])
-          // 按创建时间倒序
           allTasks.sort((a, b) => 
             new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
           )
@@ -93,10 +121,9 @@ export function useDatabase() {
     }
   }, [])
 
-  // 加载任务结果
   const loadTaskResults = useCallback(async (taskId: string): Promise<TestResult[]> => {
     try {
-      const [, store] = await transaction('results', 'readonly')
+      const store = await transaction('results', 'readonly')
       const index = store.index('taskId')
       const request = index.getAll(taskId)
       
@@ -116,7 +143,6 @@ export function useDatabase() {
     }
   }, [])
 
-  // 初始化加载
   useEffect(() => {
     const init = async () => {
       setIsLoading(true)
@@ -161,7 +187,7 @@ export function useDatabase() {
       tags,
     }
     
-    const [, store] = await transaction('tasks', 'readwrite')
+    const store = await transaction('tasks', 'readwrite')
     return new Promise((resolve, reject) => {
       const request = store.add(task)
       request.onsuccess = () => {
@@ -172,11 +198,10 @@ export function useDatabase() {
     })
   }, [])
 
-  // 更新任务
   const updateTask = useCallback(async (task: TestTask): Promise<void> => {
     const updatedTask = { ...task, updatedAt: new Date().toISOString() }
     
-    const [, store] = await transaction('tasks', 'readwrite')
+    const store = await transaction('tasks', 'readwrite')
     return new Promise((resolve, reject) => {
       const request = store.put(updatedTask)
       request.onsuccess = () => {
@@ -187,9 +212,8 @@ export function useDatabase() {
     })
   }, [])
 
-  // 删除任务
   const deleteTask = useCallback(async (taskId: string): Promise<void> => {
-    const [, store] = await transaction('tasks', 'readwrite')
+    const store = await transaction('tasks', 'readwrite')
     
     return new Promise((resolve, reject) => {
       const request = store.delete(taskId)
@@ -206,9 +230,8 @@ export function useDatabase() {
     })
   }, [])
 
-  // 保存执行结果
   const saveResult = useCallback(async (result: TestResult): Promise<void> => {
-    const [, store] = await transaction('results', 'readwrite')
+    const store = await transaction('results', 'readwrite')
     
     return new Promise((resolve, reject) => {
       const request = store.add(result)
@@ -265,7 +288,7 @@ export function useDatabase() {
           updatedAt: new Date().toISOString(),
         }
         
-        const [, store] = await transaction('tasks', 'readwrite')
+        const store = await transaction('tasks', 'readwrite')
         return new Promise((resolve, reject) => {
           const request = store.add(newTask)
           request.onsuccess = () => {
@@ -276,7 +299,6 @@ export function useDatabase() {
         })
       }
       
-      // 批量导入
       const now = new Date().toISOString()
       const newTasks: TestTask[] = importedTasks.map(task => ({
         ...task,
@@ -285,7 +307,7 @@ export function useDatabase() {
         updatedAt: now,
       }))
       
-      const [, store] = await transaction('tasks', 'readwrite')
+      const store = await transaction('tasks', 'readwrite')
       return new Promise((resolve, reject) => {
         let added = 0
         newTasks.forEach(task => {
