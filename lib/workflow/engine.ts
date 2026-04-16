@@ -127,8 +127,11 @@ export class WorkflowEngine {
         } else if (node.nextNodeId) {
           currentNodeId = node.nextNodeId
         } else {
-          console.log('[WorkflowEngine] 工作流执行完成')
-          break
+          currentNodeId = this.getNextNodeById(currentNodeId) || ''
+          if (!currentNodeId) {
+            console.log('[WorkflowEngine] 工作流执行完成')
+            break
+          }
         }
 
         await this.waitForDomSettle()
@@ -163,6 +166,15 @@ export class WorkflowEngine {
     try {
       await this.page.waitForTimeout(500)
     } catch {}
+  }
+
+  private getNextNodeById(nodeId: string): string | null {
+    const nodeIndex = this.config.nodes.findIndex(n => n.id === nodeId)
+    if (nodeIndex === -1 || nodeIndex >= this.config.nodes.length - 1) {
+      return null
+    }
+    
+    return this.config.nodes[nodeIndex + 1].id || null
   }
 
   private async takeErrorScreenshot(nodeId: string, error?: string): Promise<void> {

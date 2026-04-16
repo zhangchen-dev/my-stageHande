@@ -23,10 +23,11 @@ import {
   TestResult,
 } from '@/types'
 import { STATUS_COLORS, STATUS_LABELS } from '@/app/constants'
-import TaskCard from '@/app/components/TaskCard'
-import LogPanel from '@/app/components/LogPanel'
-import ResultModal from '@/app/components/ResultModal'
-import NewTaskModal from '@/app/components/NewTaskModal'
+import { convertWorkflowConfigToSteps } from '@/app/utils/workflow-converter'
+import TaskCard from '@/app/components/task-card/TaskCard'
+import LogPanel from '@/app/components/log-panel/LogPanel'
+import ResultModal from '@/app/components/result-modal/ResultModal'
+import NewTaskModal from '@/app/components/new-task-modal/NewTaskModal'
 
 const { Header, Content, Sider } = Layout
 const { Title } = Typography
@@ -40,6 +41,7 @@ export default function HomePage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const runTaskId = searchParams.get('run')
+  const workflowConfigStr = searchParams.get('workflowConfig')
 
   const {
     tasks,
@@ -75,13 +77,31 @@ export default function HomePage() {
 
   useEffect(() => {
     if (initDoneRef.current && runTaskId && !runningTaskId && !isStartingRef.current) {
-      const task = tasks.find(t => t.id === runTaskId)
-      if (task) {
-        taskRef.current = task
-        startTest(task)
+      if (workflowConfigStr) {
+        try {
+          const workflowConfig = JSON.parse(workflowConfigStr)
+          const task = tasks.find(t => t.id === runTaskId)
+          if (task) {
+            const convertedTask = {
+              ...task,
+              steps: convertWorkflowConfigToSteps(workflowConfig),
+            }
+            taskRef.current = convertedTask
+            startTest(convertedTask)
+          }
+        } catch (e) {
+          console.error('解析工作流配置失败:', e)
+          message.error('工作流配置格式错误')
+        }
+      } else {
+        const task = tasks.find(t => t.id === runTaskId)
+        if (task) {
+          taskRef.current = task
+          startTest(task)
+        }
       }
     }
-  }, [runTaskId, tasks, initDoneRef.current])
+  }, [runTaskId, tasks, initDoneRef.current, workflowConfigStr])
 
   useEffect(() => {
     const initApp = async () => {

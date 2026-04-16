@@ -362,9 +362,22 @@ export default function WorkflowEditor() {
   }
 
   const executeWorkflow = () => {
+    if (config.nodes.length === 0) {
+      message.warning('请先添加节点')
+      return
+    }
+
+    if (!taskId) {
+      Modal.warning({
+        title: '请先保存工作流',
+        content: '执行前请先保存工作流配置',
+      })
+      return
+    }
+
     const params = new URLSearchParams()
-    params.set('runWorkflow', taskId || 'new')
-    params.set('config', JSON.stringify(config))
+    params.set('run', taskId)
+    params.set('workflowConfig', JSON.stringify(config))
     router.push(`/?${params.toString()}`)
   }
 
@@ -497,6 +510,9 @@ export default function WorkflowEditor() {
               node={config.nodes.find(n => n.id === selectedNode)!}
               allNodes={config.nodes}
               onUpdate={(updates: Partial<WorkflowNode>) => updateNode(selectedNode, updates)}
+              onSave={() => {
+                message.success('节点配置已保存')
+              }}
               onClose={() => setSelectedNode(null)}
             />
           </Card>

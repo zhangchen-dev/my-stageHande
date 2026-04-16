@@ -2,7 +2,7 @@
 
 import { Form, Input, Select, InputNumber, Button, Space, Card, Typography, Divider, Switch } from 'antd'
 import { WorkflowNode, OperationType, ExecuteStrategy } from '@/lib/workflow/types'
-import { DeleteOutlined } from '@ant-design/icons'
+import { DeleteOutlined, SaveOutlined } from '@ant-design/icons'
 
 const { Text, Paragraph } = Typography
 const { TextArea } = Input
@@ -11,6 +11,7 @@ interface NodeConfigPanelProps {
   node: WorkflowNode
   allNodes: WorkflowNode[]
   onUpdate: (updates: Partial<WorkflowNode>) => void
+  onSave?: () => void
   onClose: () => void
 }
 
@@ -18,9 +19,32 @@ export default function NodeConfigPanel({
   node,
   allNodes,
   onUpdate,
+  onSave,
   onClose,
 }: NodeConfigPanelProps) {
   const [form] = Form.useForm()
+
+  const getNodeDisplayLabel = (n: WorkflowNode) => {
+    const typeLabels: Record<OperationType, string> = {
+      [OperationType.OPEN_PAGE]: '打开页面',
+      [OperationType.CLICK]: '点击元素',
+      [OperationType.CONDITION]: '条件判断',
+      [OperationType.FORM_FILL]: '表单填写',
+      [OperationType.SCROLL]: '滚动页面',
+      [OperationType.HOVER]: '悬停元素',
+      [OperationType.SCRIPT_EXEC]: '执行脚本',
+      [OperationType.NODE_SELECT]: '选择节点',
+    }
+    
+    let desc = ''
+    if (n.type === OperationType.OPEN_PAGE && n.params.url) {
+      desc = n.params.url.length > 30 ? `${n.params.url.slice(0, 30)}...` : n.params.url
+    } else if (n.params.aiDescription) {
+      desc = n.params.aiDescription
+    }
+    
+    return `[${typeLabels[n.type] || n.type}] ${n.id}${desc ? ` - ${desc}` : ''}`
+  }
 
   const handleValuesChange = (changedValues: any) => {
     onUpdate(changedValues)
@@ -124,10 +148,12 @@ export default function NodeConfigPanel({
             <Form.Item label="条件为真时 →" name="conditionTrueNodeId">
               <Select 
                 allowClear
-                placeholder="选择节点"
+                placeholder="选择节点（可后续添加）"
+                showSearch
+                optionFilterProp="label"
                 options={allNodes.filter(n => n.id !== node.id).map(n => ({
                   value: n.id,
-                  label: `${n.type} - ${n.id.slice(0, 12)}...`,
+                  label: getNodeDisplayLabel(n),
                 }))}
                 onChange={(value) => onUpdate({ conditionTrueNodeId: value || undefined })}
               />
@@ -136,10 +162,12 @@ export default function NodeConfigPanel({
             <Form.Item label="条件为假时 →" name="conditionFalseNodeId">
               <Select 
                 allowClear
-                placeholder="选择节点"
+                placeholder="选择节点（可后续添加）"
+                showSearch
+                optionFilterProp="label"
                 options={allNodes.filter(n => n.id !== node.id).map(n => ({
                   value: n.id,
-                  label: `${n.type} - ${n.id.slice(0, 12)}...`,
+                  label: getNodeDisplayLabel(n),
                 }))}
                 onChange={(value) => onUpdate({ conditionFalseNodeId: value || undefined })}
               />
@@ -252,16 +280,19 @@ export default function NodeConfigPanel({
         </div>
 
         <Form.Item label="操作类型" name="type">
-          <Select disabled options={[
-            { value: OperationType.CONDITION, label: '条件判断' },
-            { value: OperationType.CLICK, label: '点击元素' },
-            { value: OperationType.OPEN_PAGE, label: '打开页面' },
-            { value: OperationType.FORM_FILL, label: '表单填写' },
-            { value: OperationType.SCROLL, label: '滚动页面' },
-            { value: OperationType.NODE_SELECT, label: '选择节点' },
-            { value: OperationType.SCRIPT_EXEC, label: '执行脚本' },
-            { value: OperationType.HOVER, label: '悬停元素' },
-          ]} />
+          <Select 
+            options={[
+              { value: OperationType.CONDITION, label: '条件判断' },
+              { value: OperationType.CLICK, label: '点击元素' },
+              { value: OperationType.OPEN_PAGE, label: '打开页面' },
+              { value: OperationType.FORM_FILL, label: '表单填写' },
+              { value: OperationType.SCROLL, label: '滚动页面' },
+              { value: OperationType.NODE_SELECT, label: '选择节点' },
+              { value: OperationType.SCRIPT_EXEC, label: '执行脚本' },
+              { value: OperationType.HOVER, label: '悬停元素' },
+            ]}
+            onChange={(value) => onUpdate({ type: value as OperationType })}
+          />
         </Form.Item>
 
         <Form.Item label="执行策略" name="strategy">
@@ -275,23 +306,34 @@ export default function NodeConfigPanel({
           />
         </Form.Item>
 
-        {node.type !== OperationType.CONDITION && (
-          <Form.Item label="下一个节点 →" name="nextNodeId">
-            <Select 
-              allowClear
-              placeholder="选择下一个节点（留空表示结束）"
-              options={allNodes.filter(n => n.id !== node.id).map(n => ({
-                value: n.id,
-                label: `${n.type} - ${n.id.slice(0, 12)}...`,
-              }))}
-              onChange={(value) => onUpdate({ nextNodeId: value || undefined })}
-            />
-          </Form.Item>
-        )}
+        <Form.Item label="下一个节点 →" name="nextNodeId">
+          <Select 
+            allowClear
+            placeholder="选择下一个节点（留空则自动连接下一节点）"
+            showSearch
+            optionFilterProp="label"
+            options={allNodes.filter(n => n.id !== node.id).map(n => ({
+              value: n.id,
+              label: getNodeDisplayLabel(n),
+            }))}
+            onChange={(value) => onUpdate({ nextNodeId: value || undefined })}
+          />
+        </Form.Item>
 
         <Divider plain>参数配置</Divider>
         
         {renderTypeSpecificParams()}
+
+        <Divider />
+        
+        <Button
+          type="primary"
+          icon={<SaveOutlined />}
+          onClick={() => onSave?.()}
+          block
+        >
+          保存节点配置
+        </Button>
       </Space>
     </Form>
   )
