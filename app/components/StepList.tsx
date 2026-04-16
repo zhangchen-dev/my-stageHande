@@ -1,5 +1,6 @@
 'use client'
 
+import React, { useState } from 'react'
 import {
   Card,
   Tag,
@@ -9,25 +10,44 @@ import {
   Tooltip,
   Empty,
   Divider,
+  Form,
+  Input,
+  Select,
+  Row,
+  Col,
+  InputNumber,
+  message,
 } from 'antd'
 import {
   DeleteOutlined,
   EditOutlined,
-  DownloadOutlined,
-  UploadOutlined,
+  PlusOutlined,
+  CloseOutlined,
+  SaveOutlined,
+  UpOutlined,
+  DownOutlined,
 } from '@ant-design/icons'
-import { TestStep, TestStepType } from '@/types'
-import { getStepTypeLabel } from '@/app/constants'
+import { TestStep, TestStepType, ExecutionStrategy, ElementSelector } from '@/types'
+import { STEP_TYPES, getStepTypeLabel } from '@/app/constants'
+import { cleanSelector } from '@/app/utils/step-helpers'
 
 const { Text } = Typography
+const { Option } = Select
+
+interface SubStepFormValues {
+  type: TestStepType
+  description: string
+  value?: string
+  selector?: ElementSelector
+}
 
 interface StepListProps {
   steps: TestStep[]
   isRunning: boolean
   onEditStep: (step: TestStep) => void
   onRemoveStep: (id: string) => void
-  onExport: () => void
-  onImport: (file: File) => void
+  onUpdateSteps: (steps: TestStep[]) => void
+  defaultStrategy: ExecutionStrategy
 }
 
 function getStepBorderColor(type: TestStepType): string {
@@ -43,6 +63,8 @@ function getStepBorderColor(type: TestStepType): string {
     clear: '#999',
     followGuide: '#2f54eb',
     condition: '#1890ff',
+    conditionLoop: '#52c41a',
+    gotoStep: '#fa8c16',
   }
   return colors[type] || '#999'
 }
@@ -52,129 +74,377 @@ export default function StepList({
   isRunning,
   onEditStep,
   onRemoveStep,
-  onExport,
-  onImport,
+  onUpdateSteps,
+  defaultStrategy,
 }: StepListProps) {
   if (steps.length === 0) {
-    return (
-      <>
-        <Empty description="暂无步骤，请添加测试步骤" />
-        <ImportExportButtons onExport={onExport} onImport={onImport} stepsCount={0} />
-      </>
-    )
+    return <Empty description="暂无步骤，请使用上方表单添加测试步骤" />
   }
 
   return (
-    <>
-      <div style={{ maxHeight: 400, overflowY: 'auto' }}>
-        {steps.map((item, index) => {
-          if (item.type === 'condition') {
-            const conditionStep = item as any
-            return (
-              <Card
-                key={item.id}
-                size="small"
-                style={{ marginBottom: 8, borderLeft: `3px solid #1890ff` }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ whiteSpace: 'nowrap', overflowX: 'auto' }}>
-                      <Space size={4}>
-                        <Text type="secondary">{index + 1}.</Text>
-                        <Tag color="blue">{getStepTypeLabel(item.type)}</Tag>
-                        <Text>{item.description}</Text>
-                      </Space>
-                    </div>
-                    <div style={{ marginTop: 4, marginLeft: 24, whiteSpace: 'nowrap', overflowX: 'auto' }}>
-                      <Text type="secondary">条件: {conditionStep.condition?.type || 'elementExists'}</Text>
-                      {conditionStep.condition?.value && (
-                        <Text type="secondary" style={{ marginLeft: 12 }}>匹配值: {conditionStep.condition.value}</Text>
-                      )}
-                      <Text type="secondary" style={{ marginLeft: 12 }}>
-                        满足时 {conditionStep.thenSteps?.length || 0} 步
-                      </Text>
-                      {conditionStep.elseSteps && conditionStep.elseSteps.length > 0 && (
-                        <Text type="secondary" style={{ marginLeft: 12 }}>
-                          不满足时 {conditionStep.elseSteps.length} 步
-                        </Text>
-                      )}
-                    </div>
-                  </div>
-                  <Space size={4}>
-                    <Tooltip title="编辑">
-                      <Button type="text" size="small" icon={<EditOutlined />} onClick={() => onEditStep(item)} disabled={isRunning} />
-                    </Tooltip>
-                    <Tooltip title="删除">
-                      <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={() => onRemoveStep(item.id)} disabled={isRunning} />
-                    </Tooltip>
-                  </Space>
-                </div>
-              </Card>
-            )
-          }
-
-          return (
-            <Card
-              key={item.id}
-              size="small"
-              style={{ marginBottom: 8, borderLeft: `3px solid ${getStepBorderColor(item.type)}` }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflowX: 'auto' }}>
-                  <Space size={4}>
-                    <Text type="secondary">{index + 1}.</Text>
-                    <Tag>{getStepTypeLabel(item.type)}</Tag>
-                    <Text>{item.description}</Text>
-                    {item.value && <Text type="secondary">→ {item.value}</Text>}
-                    {item.selector && <Tag color="purple">选择器</Tag>}
-                  </Space>
-                </div>
-                <Space size={4}>
-                  <Tooltip title="编辑">
-                    <Button type="text" size="small" icon={<EditOutlined />} onClick={() => onEditStep(item)} disabled={isRunning} />
-                  </Tooltip>
-                  <Tooltip title="删除">
-                    <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={() => onRemoveStep(item.id)} disabled={isRunning} />
-                  </Tooltip>
-                </Space>
-              </div>
-            </Card>
-          )
-        })}
-      </div>
-
-      <Divider />
-      <ImportExportButtons onExport={onExport} onImport={onImport} stepsCount={steps.length} />
-    </>
+    <div style={{ maxHeight: 500, overflowY: 'auto', padding: '8px 0' }}>
+      {steps.map((item, index) => (
+        <StepCard
+          key={item.id}
+          step={item}
+          index={index}
+          isRunning={isRunning}
+          onEdit={onEditStep}
+          onRemove={onRemoveStep}
+          onUpdateStep={(updatedStep) => {
+            const newSteps = [...steps]
+            newSteps[index] = updatedStep
+            onUpdateSteps(newSteps)
+          }}
+          defaultStrategy={defaultStrategy}
+          allSteps={steps}
+        />
+      ))}
+    </div>
   )
 }
 
-function ImportExportButtons({
-  onExport,
-  onImport,
-  stepsCount,
-}: {
-  onExport: () => void
-  onImport: (file: File) => void
-  stepsCount: number
-}) {
+interface StepCardProps {
+  step: TestStep
+  index: number
+  isRunning: boolean
+  onEdit: (step: TestStep) => void
+  onRemove: (id: string) => void
+  onUpdateStep: (step: TestStep) => void
+  defaultStrategy: ExecutionStrategy
+  allSteps: TestStep[] // 所有步骤（用于 gotoStep 查找目标）
+}
+
+function StepCard({ step, index, isRunning, onEdit, onRemove, onUpdateStep, defaultStrategy, allSteps }: StepCardProps) {
+  const [expanded, setExpanded] = useState(false)
+
+  const isCondition = step.type === 'condition'
+  const isConditionLoop = step.type === 'conditionLoop'
+  const isGotoStep = step.type === 'gotoStep'
+
+  const hasSubSteps = isCondition || isConditionLoop
+
+  const findTargetStepInfo = (targetId: string | undefined, allSteps: TestStep[]) => {
+    if (!targetId) return null
+    const targetIndex = allSteps.findIndex(s => s.id === targetId)
+    if (targetIndex === -1) return null
+    return { index: targetIndex + 1, step: allSteps[targetIndex] }
+  }
+
   return (
-    <Space>
-      <Button icon={<DownloadOutlined />} onClick={onExport} disabled={stepsCount === 0}>
-        导出步骤
-      </Button>
-      <label style={{ cursor: 'pointer' }}>
-        <input
-          type="file"
-          accept=".json"
-          style={{ display: 'none' }}
-          onChange={(e) => {
-            const file = e.target.files?.[0]
-            if (file) onImport(file)
-          }}
-        />
-        <Button icon={<UploadOutlined />}>导入步骤</Button>
-      </label>
-    </Space>
+    <Card
+      size="small"
+      style={{
+        marginBottom: 8,
+        borderLeft: `3px solid ${getStepBorderColor(step.type)}`,
+        background: hasSubSteps ? '#f9f9f9' : isGotoStep ? '#fff7e6' : '#fff',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <Space size={4} wrap>
+            <Text type="secondary">{index + 1}.</Text>
+            <Tag color={isCondition ? 'blue' : isConditionLoop ? 'green' : isGotoStep ? 'orange' : undefined}>
+              {getStepTypeLabel(step.type)}
+            </Tag>
+            <Text strong>{step.description}</Text>
+            {step.value && <Text type="secondary">→ {step.value}</Text>}
+            {isGotoStep && (() => {
+              const targetInfo = findTargetStepInfo(step.targetStepId, allSteps)
+              return targetInfo ? (
+                <Tag color="processing">→ 跳转到第 {targetInfo.index} 步: {targetInfo.step.description || targetInfo.step.type}</Tag>
+              ) : (
+                <Tag color="warning">未选择目标</Tag>
+              )
+            })()}
+            {hasSubSteps && (
+              <Button
+                type="link"
+                size="small"
+                icon={expanded ? <UpOutlined /> : <DownOutlined />}
+                onClick={() => setExpanded(!expanded)}
+                style={{ padding: 0, height: 'auto' }}
+              >
+                {expanded ? '收起' : '展开'} 
+                {isCondition && ` (${step.thenSteps?.length || 0} 个子步骤)`}
+                {isConditionLoop && ` (${step.loopSteps?.length || 0} 个循环步骤)`}
+              </Button>
+            )}
+          </Space>
+
+          {isGotoStep && step.targetStepId && (
+            <div style={{ marginTop: 4, marginLeft: 24, padding: '4px 8px', background: '#fffbe6', borderRadius: 4, display: 'inline-block' }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                🎯 执行后将跳转到目标步骤继续执行
+              </Text>
+            </div>
+          )}
+
+          {expanded && hasSubSteps && (
+            <SubStepManager
+              step={step}
+              defaultStrategy={defaultStrategy}
+              onUpdateStep={onUpdateStep}
+              isRunning={isRunning}
+            />
+          )}
+        </div>
+
+        {!expanded && (
+          <Space size={4}>
+            <Tooltip title="编辑">
+              <Button
+                type="text"
+                size="small"
+                icon={<EditOutlined />}
+                onClick={() => onEdit(step)}
+                disabled={isRunning}
+              />
+            </Tooltip>
+            <Tooltip title="删除">
+              <Button
+                type="text"
+                size="small"
+                danger
+                icon={<DeleteOutlined />}
+                onClick={() => onRemove(step.id)}
+                disabled={isRunning}
+              />
+            </Tooltip>
+          </Space>
+        )}
+      </div>
+    </Card>
+  )
+}
+
+interface SubStepManagerProps {
+  step: TestStep
+  defaultStrategy: ExecutionStrategy
+  onUpdateStep: (step: TestStep) => void
+  isRunning: boolean
+}
+
+function SubStepManager({ step, defaultStrategy, onUpdateStep, isRunning }: SubStepManagerProps) {
+  const [addForm] = Form.useForm<SubStepFormValues>()
+  const [editingIndex, setEditingIndex] = useState<number | null>(null)
+  const [editForm] = Form.useForm<SubStepFormValues>()
+
+  const isCondition = step.type === 'condition'
+  const subSteps = isCondition ? (step.thenSteps || []) : (step.loopSteps || [])
+  const subStepField = isCondition ? 'thenSteps' : 'loopSteps'
+
+  const handleAddSubStep = () => {
+    const values = addForm.getFieldsValue()
+    if (!values.type || !values.description) {
+      message.warning('请填写操作类型和描述')
+      return
+    }
+
+    const newSubStep: TestStep = {
+      id: `sub_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      type: values.type,
+      description: values.description,
+      value: values.value || undefined,
+      selector: defaultStrategy === 'selector' ? cleanSelector(values.selector) : undefined,
+      strategy: defaultStrategy,
+    }
+
+    if (values.type === 'condition') {
+      newSubStep.thenSteps = []
+    } else if (values.type === 'conditionLoop') {
+      newSubStep.maxIterations = 10
+      newSubStep.loopSteps = []
+    }
+
+    onUpdateStep({
+      ...step,
+      [subStepField]: [...subSteps, newSubStep],
+    })
+    addForm.resetFields()
+  }
+
+  const handleDeleteSubStep = (subIndex: number) => {
+    const newSubSteps = [...subSteps]
+    newSubSteps.splice(subIndex, 1)
+    onUpdateStep({
+      ...step,
+      [subStepField]: newSubSteps,
+    })
+  }
+
+  const handleStartEdit = (subIndex: number, subStep: TestStep) => {
+    editForm.setFieldsValue({
+      type: subStep.type,
+      description: subStep.description,
+      value: subStep.value,
+    })
+    setEditingIndex(subIndex)
+  }
+
+  const handleSaveEdit = (subIndex: number) => {
+    const values = editForm.getFieldsValue()
+    if (!values.type || !values.description) {
+      message.warning('请填写操作类型和描述')
+      return
+    }
+
+    const newSubSteps = [...subSteps]
+    newSubSteps[subIndex] = {
+      ...newSubSteps[subIndex],
+      type: values.type,
+      description: values.description,
+      value: values.value || undefined,
+      selector: defaultStrategy === 'selector' ? cleanSelector(values.selector) : undefined,
+    }
+    
+    onUpdateStep({
+      ...step,
+      [subStepField]: newSubSteps,
+    })
+    setEditingIndex(null)
+  }
+
+  return (
+    <div style={{ marginTop: 12, marginLeft: 24, padding: 12, background: '#fff', borderRadius: 6, border: '1px solid #d9d9d9' }}>
+      <Text strong style={{ display: 'block', marginBottom: 8 }}>
+        {isCondition ? '📋 条件满足时执行的子步骤' : '🔄 循环体内执行的步骤'}
+      </Text>
+
+      {subSteps.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          {subSteps.map((subStep, idx) => (
+            <div key={subStep.id} style={{ marginBottom: 8, padding: '6px 8px', background: '#f5f5f5', borderRadius: 4 }}>
+              {editingIndex === idx ? (
+                <div onClick={(e) => e.stopPropagation()}>
+                  <Form form={editForm} layout="vertical" size="small">
+                    <Row gutter={8}>
+                      <Col span={8}>
+                        <Form.Item name="type" rules={[{ required: true }]}>
+                          <Select size="small" placeholder="类型">
+                            {STEP_TYPES.map(t => (
+                              <Option key={t.value} value={t.value}>{t.label}</Option>
+                            ))}
+                          </Select>
+                        </Form.Item>
+                      </Col>
+                      <Col span={12}>
+                        <Form.Item name="description" rules={[{ required: true }]}>
+                          <Input size="small" placeholder="描述" />
+                        </Form.Item>
+                      </Col>
+                      <Col span={4}>
+                        <Form.Item name="value">
+                          <Input size="small" placeholder="值" />
+                        </Form.Item>
+                      </Col>
+                    </Row>
+                    <Space size="small">
+                      <Button type="primary" size="small" icon={<SaveOutlined />} onClick={() => handleSaveEdit(idx)}>
+                        保存
+                      </Button>
+                      <Button size="small" onClick={() => setEditingIndex(null)}>取消</Button>
+                    </Space>
+                  </Form>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Space size={4}>
+                    <Text type="secondary">{idx + 1}.</Text>
+                    <Tag>{getStepTypeLabel(subStep.type)}</Tag>
+                    <Text>{subStep.description}</Text>
+                    {subStep.value && <Text type="secondary">({subStep.value})</Text>}
+                  </Space>
+                  <Space size={4}>
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<EditOutlined />}
+                      onClick={() => handleStartEdit(idx, subStep)}
+                      disabled={isRunning}
+                    />
+                    <Button
+                      type="text"
+                      size="small"
+                      danger
+                      icon={<DeleteOutlined />}
+                      onClick={() => handleDeleteSubStep(idx)}
+                      disabled={isRunning}
+                    />
+                  </Space>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <Divider style={{ margin: '8px 0' }} />
+
+      <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>➕ 添加子步骤：</Text>
+      
+      <Form form={addForm} layout="vertical" size="small">
+        <Row gutter={8}>
+          <Col span={8}>
+            <Form.Item name="type" rules={[{ required: true }]} style={{ marginBottom: 8 }}>
+              <Select placeholder="操作类型">
+                {STEP_TYPES.map(t => (
+                  <Option key={t.value} value={t.value}>{t.label}</Option>
+                ))}
+              </Select>
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="description" rules={[{ required: true }]} style={{ marginBottom: 8 }}>
+              <Input placeholder="操作描述" />
+            </Form.Item>
+          </Col>
+          <Col span={4}>
+            <Form.Item name="value" style={{ marginBottom: 8 }}>
+              <Input placeholder="值（可选）" />
+            </Form.Item>
+          </Col>
+        </Row>
+        
+        <Button
+          type="dashed"
+          icon={<PlusOutlined />}
+          onClick={handleAddSubStep}
+          block
+          size="small"
+          disabled={isRunning}
+        >
+          添加子步骤
+        </Button>
+      </Form>
+
+      {step.type === 'conditionLoop' && (
+        <div style={{ marginTop: 12, padding: 12, background: '#fffbe6', borderRadius: 4 }}>
+          <Text strong style={{ display: 'block', marginBottom: 8 }}>⚙️ 循环条件配置</Text>
+          <Text type="secondary" style={{ display: 'block', marginBottom: 4 }}>
+            最大循环次数：<Text strong>{step.maxIterations || 10}</Text>
+          </Text>
+          {step.conditionStep ? (
+            <div style={{ marginTop: 8, padding: 8, background: '#fff', borderRadius: 4 }}>
+              <Space>
+                <Tag color="orange">条件步骤</Tag>
+                <Text>{step.conditionStep.description || '未配置描述'}</Text>
+                <Button
+                  size="small"
+                  danger
+                  onClick={() => onUpdateStep({ ...step, conditionStep: undefined })}
+                >
+                  删除条件
+                </Button>
+              </Space>
+            </div>
+          ) : (
+            <Text type="warning" style={{ display: 'block', marginTop: 4 }}>
+              ⚠️ 未配置循环条件步骤，请在上方编辑器中配置
+            </Text>
+          )}
+        </div>
+      )}
+    </div>
   )
 }

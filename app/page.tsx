@@ -1,45 +1,50 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Layout, Button, Space, Card, Typography, Tag, message, Form } from 'antd'
+import { useSearchParams, useRouter } from 'next/navigation'
+import { Layout, Button, Space, Card, Typography, Tag, message, Modal, Empty, Spin, Badge, Progress, Alert } from 'antd'
 import {
   PlayCircleOutlined,
+  StopOutlined,
+  PlusOutlined,
+  EditOutlined,
+  DeleteOutlined,
+  ExportOutlined,
+  ImportOutlined,
+  ClearOutlined,
   FileTextOutlined,
+  ReloadOutlined,
 } from '@ant-design/icons'
 import { useDatabase } from '@/hooks/useDatabase'
 import {
-  TestStep,
   TestTask,
   LogEntry,
   ExecutionStrategy,
   TestResult,
-  ExecutionRecord,
-  StepExecutionRecord,
-  TaskStatus,
 } from '@/types'
 import { STATUS_COLORS, STATUS_LABELS } from '@/app/constants'
-import { cleanSelector } from '@/app/utils/step-helpers'
-import { FormValues } from '@/app/components/StepEditor'
-import TaskSidebar from '@/app/components/TaskSidebar'
-import StepEditor from '@/app/components/StepEditor'
-import StepList from '@/app/components/StepList'
+import TaskCard from '@/app/components/TaskCard'
 import LogPanel from '@/app/components/LogPanel'
 import ResultModal from '@/app/components/ResultModal'
 import NewTaskModal from '@/app/components/NewTaskModal'
 
 const { Header, Content, Sider } = Layout
-const { Title, Text } = Typography
+const { Title } = Typography
 
 const PRESET_FILES = [
   '/preset-tasks/demo-invoice-task-v5.json',
   '/preset-tasks/demo-invoice-task.json',
 ]
 
-export default function TestConsole() {
+export default function HomePage() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const runTaskId = searchParams.get('run')
+
   const {
     tasks,
     results,
-    isLoading,
+    isLoading: isDbLoading,
     createTask,
     updateTask,
     deleteTask,
@@ -47,64 +52,81 @@ export default function TestConsole() {
     getLatestResult,
     importTasks,
     exportAllTasks,
+    loadTasks,
   } = useDatabase()
 
-  const [selectedTask, setSelectedTask] = useState<TestTask | null>(null)
-  const [steps, setSteps] = useState<TestStep[]>([])
+  const [runningTaskId, setRunningTaskId] = useState<string | null>(null)
+  const [terminatedTaskId, setTerminatedTaskId] = useState<string | null>(null)
+  const [currentTestId, setCurrentTestId] = useState<string | null>(null)
   const [logs, setLogs] = useState<LogEntry[]>([])
-  const [isRunning, setIsRunning] = useState(false)
   const [useHeadful, setUseHeadful] = useState(false)
-  const [editingStepId, setEditingStepId] = useState<string | null>(null)
-  const [editingStepData, setEditingStepData] = useState<any>(null)
   const [defaultStrategy, setDefaultStrategy] = useState<ExecutionStrategy>('auto')
-  const [activeTab, setActiveTab] = useState<'steps' | 'results'>('steps')
-
-  const [editForm] = Form.useForm<FormValues>()
-  const [addForm] = Form.useForm<FormValues>()
-
   const [showNewTaskModal, setShowNewTaskModal] = useState(false)
   const [showResultModal, setShowResultModal] = useState(false)
   const [selectedResult, setSelectedResult] = useState<TestResult | null>(null)
-
-  const [presetTasks, setPresetTasks] = useState<TestTask[]>([])
   const [taskTemplates, setTaskTemplates] = useState<TestTask[]>([])
+  const [abortController, setAbortController] = useState<AbortController | null>(null)
+  const [isInitialized, setIsInitialized] = useState(false)
 
-  const eventSourceRef = useRef<EventSource | null>(null)
-
-  useEffect(() => {
-    return () => {
-      if (eventSourceRef.current) eventSourceRef.current.close()
-    }
-  }, [])
-
-  useEffect(() => {
-    if (selectedTask) {
-      setSteps(selectedTask.steps || [])
-    } else {
-      setSteps([])
-    }
-  }, [selectedTask])
+  const taskRef = useRef<TestTask | null>(null)
+  const isStartingRef = useRef(false)
+  const isStoppedRef = useRef(false)
+  const initDoneRef = useRef(false)
 
   useEffect(() => {
-    if (editingStepId && editingStepData) {
-      setTimeout(() => {
-        editForm.setFieldsValue(editingStepData)
-      }, 0)
+    if (initDoneRef.current && runTaskId && !runningTaskId && !isStartingRef.current) {
+      const task = tasks.find(t => t.id === runTaskId)
+      if (task) {
+        taskRef.current = task
+        startTest(task)
+      }
     }
-  }, [editingStepId, editingStepData, editForm])
+  }, [runTaskId, tasks, initDoneRef.current])
+
+  useEffect(() => {
+    const initApp = async () => {
+      try {
+        await loadPresetTasks()
+        loadTaskTemplates()
+        
+        const runningTasks = tasks.filter(t => t.status === 'running')
+        for (const task of runningTasks) {
+          console.log(`[初始化] 重置未完成的任务: ${task.name}`)
+          try {
+            await updateTask({ ...task, status: 'ready' })
+          } catch (e) {
+            console.error('[初始化] 重置任务失败:', e)
+          }
+        }
+        
+        if (runningTasks.length > 0) {
+          message.info('已重置未完成的任务为就绪状态')
+        }
+        
+        initDoneRef.current = true
+        setIsInitialized(true)
+      } catch (error) {
+        console.error('初始化失败:', error)
+        initDoneRef.current = true
+        setIsInitialized(true)
+      }
+    }
+
+    if (!isInitialized && !isDbLoading) {
+      initApp()
+    }
+  }, [isDbLoading])
 
   const loadPresetTasks = useCallback(async () => {
     for (const fileUrl of PRESET_FILES) {
       try {
         const response = await fetch(fileUrl)
         if (response.ok) {
-          const data = await response.json()
-          const tasks = Array.isArray(data) ? data : [data]
-          setPresetTasks(tasks)
-          return
+          return true
         }
       } catch { continue }
     }
+    return false
   }, [])
 
   const loadTaskTemplates = useCallback(() => {
@@ -116,32 +138,32 @@ export default function TestConsole() {
     }
   }, [])
 
-  useEffect(() => {
-    loadPresetTasks()
-    loadTaskTemplates()
-  }, [loadPresetTasks, loadTaskTemplates])
-
-  const importPresetTask = useCallback(async (task: TestTask) => {
-    try {
-      const imported = await importTasks(JSON.stringify(task))
-      message.success(`已导入任务：${imported[0]?.name || task.name}`)
-    } catch {
-      message.error('导入预设任务失败')
-    }
-  }, [importTasks])
-
   const initAllPresetTasks = useCallback(async () => {
     try {
-      const response = await fetch('/api/tasks/init', { method: 'POST' })
-      if (!response.ok) throw new Error('获取预设任务失败')
-      const data = await response.json()
-      const tasksToImport: TestTask[] = data.tasks
-      if (tasksToImport.length > 0) {
-        const imported = await importTasks(JSON.stringify(tasksToImport))
-        message.success(`成功初始化 ${imported.length} 个预设任务到数据库！`)
-      }
+      Modal.confirm({
+        title: '初始化预设任务',
+        content: '确定要初始化预设任务吗？这可能会添加示例任务到您的任务列表中。',
+        okText: '确定',
+        cancelText: '取消',
+        onOk: async () => {
+          try {
+            const response = await fetch('/api/tasks/init', { method: 'POST' })
+            if (!response.ok) throw new Error('获取预设任务失败')
+            const data = await response.json()
+            const tasksToImport: TestTask[] = data.tasks
+            if (tasksToImport.length > 0) {
+              const imported = await importTasks(JSON.stringify(tasksToImport))
+              message.success(`成功初始化 ${imported.length} 个预设任务！`)
+            } else {
+              message.info('没有可用的预设任务')
+            }
+          } catch {
+            message.error('初始化失败，请重试')
+          }
+        },
+      })
     } catch {
-      message.error('初始化失败，请重试')
+      message.error('操作失败，请重试')
     }
   }, [importTasks])
 
@@ -151,7 +173,7 @@ export default function TestConsole() {
         ...task,
         id: `template_${Date.now()}`,
         name: `${task.name} (模板)`,
-        status: 'draft',
+        status: 'draft' as const,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       }
@@ -173,174 +195,59 @@ export default function TestConsole() {
     message.success('模板已删除')
   }, [loadTaskTemplates])
 
-  const handleSelectTask = (task: TestTask) => {
-    setSelectedTask(task)
-    setLogs([])
-    setActiveTab('steps')
-    setEditingStepId(null)
-    setEditingStepData(null)
-  }
-
-  const addStep = (values: FormValues) => {
-    if (!selectedTask) {
-      message.warning('请先创建或选择一个任务')
+  const startTest = async (task: TestTask) => {
+    if (!task || task.steps.length === 0) {
+      message.warning('任务没有配置步骤，请先编辑任务添加步骤')
       return
     }
 
-    let newStep: TestStep
-    if (values.type === 'condition') {
-      newStep = {
-        id: `step_${Date.now()}`,
-        type: 'condition',
-        description: values.description,
-        condition: values.condition || {
-          type: 'elementExists' as const,
-          selector: cleanSelector(values.selector),
-          value: values.value,
-        },
-        thenSteps: [],
-        elseSteps: undefined,
-      } as any
-    } else {
-      newStep = {
-        id: `step_${Date.now()}`,
-        type: values.type,
-        description: values.description,
-        value: values.value || undefined,
-        selector: cleanSelector(values.selector),
-        strategy: defaultStrategy,
-      }
-    }
-
-    const updatedSteps = [...steps, newStep]
-    setSteps(updatedSteps)
-    const updatedTask = { ...selectedTask, steps: updatedSteps }
-    updateTask(updatedTask)
-    setSelectedTask(updatedTask)
-  }
-
-  const removeStep = (id: string) => {
-    const updatedSteps = steps.filter(s => s.id !== id)
-    setSteps(updatedSteps)
-    if (selectedTask) {
-      const updatedTask = { ...selectedTask, steps: updatedSteps }
-      updateTask(updatedTask)
-      setSelectedTask(updatedTask)
-    }
-    if (editingStepId === id) setEditingStepId(null)
-  }
-
-  const startEditStep = (step: TestStep) => {
-    setEditingStepId(step.id)
-
-    const formValues: any = {
-      type: step.type,
-      description: step.description,
-      value: step.value || undefined,
-      strategy: step.strategy || defaultStrategy,
-    }
-
-    if (step.selector) {
-      formValues['selector.id'] = step.selector.id || undefined
-      formValues['selector.className'] = step.selector.className || undefined
-      formValues['selector.classPrefix'] = step.selector.classPrefix || undefined
-      formValues['selector.text'] = step.selector.text || undefined
-      formValues['selector.css'] = step.selector.css || undefined
-      formValues['selector.xpath'] = step.selector.xpath || undefined
-      formValues['selector.testId'] = step.selector.testId || undefined
-      formValues['selector.name'] = step.selector.name || undefined
-      formValues['selector.containsText'] = step.selector.containsText || undefined
-    }
-
-    if (step.type === 'condition') {
-      const conditionStep = step as any
-      formValues['condition.type'] = conditionStep.condition?.type || undefined
-      formValues['conditionValue'] = conditionStep.condition?.value || undefined
-      if (conditionStep.condition?.selector) {
-        formValues['condition.selector.id'] = conditionStep.condition.selector.id || undefined
-        formValues['condition.selector.className'] = conditionStep.condition.selector.className || undefined
-        formValues['condition.selector.text'] = conditionStep.condition.selector.text || undefined
-        formValues['condition.selector.css'] = conditionStep.condition.selector.css || undefined
-        formValues['condition.selector.xpath'] = conditionStep.condition.selector.xpath || undefined
-        formValues['condition.selector.testId'] = conditionStep.condition.selector.testId || undefined
-      }
-    }
-
-    setEditingStepData(formValues)
-  }
-
-  const saveEditedStep = (values: FormValues) => {
-    if (!editingStepId || !selectedTask) return
-
-    const updatedSteps = steps.map(step => {
-      if (step.id === editingStepId) {
-        if (values.type === 'condition') {
-          return {
-            ...step,
-            type: 'condition',
-            description: values.description,
-            condition: values.condition || {
-              type: 'elementExists' as const,
-              selector: cleanSelector(values.selector),
-              value: values.value,
-            },
-          } as any
-        } else {
-          return {
-            ...step,
-            type: values.type,
-            description: values.description,
-            value: values.value || undefined,
-            selector: cleanSelector(values.selector),
-            strategy: defaultStrategy,
-          }
-        }
-      }
-      return step
-    })
-
-    setSteps(updatedSteps)
-    const updatedTask = { ...selectedTask, steps: updatedSteps }
-    updateTask(updatedTask)
-    setSelectedTask(updatedTask)
-    setEditingStepId(null)
-    setEditingStepData(null)
-    editForm.resetFields()
-  }
-
-  const cancelEdit = () => {
-    setEditingStepId(null)
-    setEditingStepData(null)
-    editForm.resetFields()
-  }
-
-  const startTest = async () => {
-    if (!selectedTask || steps.length === 0) {
-      message.warning('请先选择任务并添加步骤')
+    if (runningTaskId) {
+      message.warning('已有任务正在执行中，请先终止当前任务')
       return
     }
 
-    setIsRunning(true)
+    isStartingRef.current = true
+    isStoppedRef.current = false
+    setRunningTaskId(task.id)
+    taskRef.current = task
     setLogs([])
-
-    const runningTask = { ...selectedTask, status: 'running' as const }
-    updateTask(runningTask)
-    setSelectedTask(runningTask)
-
+    
     const testId = `test_${Date.now()}`
+    setCurrentTestId(testId)
+
+    try {
+      await updateTask({ ...task, status: 'running' as const })
+    } catch (error) {
+      message.error('更新任务状态失败')
+      setRunningTaskId(null)
+      isStartingRef.current = false
+      return
+    }
+
+    const controller = new AbortController()
+    setAbortController(controller)
 
     try {
       const response = await fetch('/api/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ steps, useHeadful, strategy: defaultStrategy }),
+        body: JSON.stringify({ 
+          steps: task.steps, 
+          useHeadful, 
+          strategy: defaultStrategy,
+          testId
+        }),
+        signal: controller.signal,
       })
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
 
       if (!response.body) throw new Error('无法获取响应流')
 
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
-      const executionRecords: StepExecutionRecord[] = []
 
       while (true) {
         const { done, value } = await reader.read()
@@ -353,55 +260,39 @@ export default function TestConsole() {
           if (line.startsWith('data: ')) {
             try {
               const log = JSON.parse(line.slice(6)) as LogEntry
-              setLogs(prev => [...prev, log])
-
-              if (log.details?.executionRecords) {
-                for (const record of log.details.executionRecords as ExecutionRecord[]) {
-                  executionRecords.push({
-                    stepId: record.stepId,
-                    stepType: 'click',
-                    description: record.message.replace(/^(成功|失败): /, ''),
-                    strategy: 'auto',
-                    status: record.status === 'success' ? 'success' : 'failed',
-                    screenshot: record.screenshot,
-                    aiConfidence: record.aiConfidence,
-                    selectorUsed: record.selectorUsed,
-                  })
-                }
+              
+              if (!isStoppedRef.current) {
+                setLogs(prev => [...prev, log])
               }
 
-              if (log.message.includes('完成') || log.level === 'error') {
+              if (log.message.includes('测试完成') || log.message.includes('测试失败') || log.message.includes('测试异常')) {
+                const failedSteps = (log.details?.failedSteps as number) || 0
+                const passedSteps = (log.details?.passedSteps as number) || 0
+                const isSuccess = log.level === 'success' && failedSteps === 0
+                
                 const result: TestResult = {
                   id: `result_${Date.now()}`,
-                  taskId: selectedTask.id,
-                  taskName: selectedTask.name,
-                  status: log.level === 'error' ? 'failed' : 'success',
+                  taskId: task.id,
+                  taskName: task.name,
+                  status: isSuccess ? 'success' : 'failed',
                   executedAt: new Date().toISOString(),
-                  duration: 0,
-                  totalSteps: steps.length,
-                  passedSteps: executionRecords.filter(r => r.status === 'success').length,
-                  failedSteps: executionRecords.filter(r => r.status === 'failed').length,
+                  duration: (log.details?.totalDuration as number) || 0,
+                  totalSteps: task.steps.length,
+                  passedSteps,
+                  failedSteps,
                   skippedSteps: 0,
-                  executionRecords: executionRecords.map(r => ({
-                    id: `exec_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                    stepId: r.stepId,
-                    timestamp: new Date().toISOString(),
-                    status: r.status === 'success' ? 'success' : 'failed',
-                    message: r.description,
-                    screenshot: r.screenshot,
-                    selectorUsed: r.selectorUsed,
-                    aiConfidence: r.aiConfidence,
-                  })),
-                  screenshots: executionRecords.filter(r => r.screenshot).map(r => r.screenshot as string),
+                  executionRecords: [],
+                  screenshots: [],
                 }
-                saveResult(result)
-
-                const finalTask: TestTask = {
-                  ...selectedTask,
-                  status: (log.level === 'error' ? 'failed' : 'completed') as TaskStatus,
+                
+                await saveResult(result)
+                
+                let finalStatus: 'completed' | 'failed' = isSuccess ? 'completed' : 'failed'
+                if (log.message.includes('测试异常') || failedSteps > 0) {
+                  finalStatus = 'failed'
                 }
-                updateTask(finalTask)
-                setSelectedTask(finalTask)
+                
+                await updateTask({ ...task, status: finalStatus })
               }
             } catch (e) {
               console.error('解析日志失败:', e)
@@ -409,69 +300,175 @@ export default function TestConsole() {
           }
         }
       }
-    } catch {
-      message.error('测试执行失败')
-    }
-
-    setIsRunning(false)
-  }
-
-  const handleImport = async (file: File) => {
-    try {
-      const content = await file.text()
-      const importedSteps: TestStep[] = JSON.parse(content)
-      if (!Array.isArray(importedSteps) || importedSteps.length === 0) throw new Error('无效格式')
-
-      const newSteps = importedSteps.map(step => ({
-        ...step,
-        id: `step_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      }))
-
-      if (selectedTask) {
-        const updatedSteps = [...steps, ...newSteps]
-        setSteps(updatedSteps)
-        const updatedTask = { ...selectedTask, steps: updatedSteps }
-        updateTask(updatedTask)
-        setSelectedTask(updatedTask)
+    } catch (error: unknown) {
+      console.error('[执行] 错误:', error)
+      
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.log('[执行] 任务被中止')
       } else {
-        setSteps(newSteps)
+        const errorMessage = error instanceof Error ? error.message : '未知错误'
+        
+        if (!isStoppedRef.current) {
+          const finalLog: LogEntry = {
+            timestamp: new Date().toISOString(),
+            level: 'error',
+            message: `💥 测试异常终止: ${errorMessage}`,
+            details: { 
+              error: error instanceof Error ? error.stack : undefined,
+            },
+          }
+          setLogs(prev => [...prev, finalLog])
+          
+          message.error('测试执行失败: ' + errorMessage)
+          
+          if (taskRef.current) {
+            await updateTask({ ...taskRef.current, status: 'failed' }).catch(e => {
+              console.error('[执行] 更新失败状态出错:', e)
+            })
+          }
+        }
       }
-      message.success(`成功导入 ${newSteps.length} 个步骤`)
-    } catch {
-      message.error('导入失败：文件格式不正确或数据损坏')
+    } finally {
+      if (!isStoppedRef.current) {
+        setRunningTaskId(null)
+        setAbortController(null)
+        setCurrentTestId(null)
+        taskRef.current = null
+        isStartingRef.current = false
+      }
     }
   }
 
-  const handleExport = () => {
-    if (steps.length === 0) {
-      message.warning('没有可导出的步骤')
+  const stopTest = useCallback(async () => {
+    if (!abortController || !currentTestId) {
+      message.warning('没有正在执行的任务')
       return
     }
-    const dataStr = JSON.stringify(steps, null, 2)
-    const dataBlob = new Blob([dataStr], { type: 'application/json' })
-    const url = URL.createObjectURL(dataBlob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `steps-${selectedTask?.name || 'test'}-${new Date().toISOString().split('T')[0]}.json`
-    link.click()
-    URL.revokeObjectURL(url)
-    message.success('步骤导出成功')
-  }
-
-  const handleExportAllTasks = () => {
-    const dataStr = exportAllTasks()
-    const blob = new Blob([dataStr], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `all-tasks-${new Date().toISOString().split('T')[0]}.json`
-    link.click()
-  }
+    
+    console.log('[终止] 开始终止任务...')
+    
+    const currentTaskId = runningTaskId
+    const currentTask = taskRef.current
+    const testIdToAbort = currentTestId
+    const controllerToAbort = abortController
+    
+    isStoppedRef.current = true
+    
+    setLogs(prev => [...prev, {
+      timestamp: new Date().toISOString(),
+      level: 'warning',
+      message: `⚹️ 正在终止任务执行...`,
+      details: { 
+        action: 'user_terminate',
+        taskId: currentTaskId,
+        testId: testIdToAbort,
+      },
+    }])
+    
+    setRunningTaskId(null)
+    setAbortController(null)
+    setCurrentTestId(null)
+    
+    if (currentTaskId) {
+      setTerminatedTaskId(currentTaskId)
+    }
+    
+    taskRef.current = null
+    isStartingRef.current = false
+    
+    controllerToAbort.abort()
+    
+    fetch('/api/test', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        testId: testIdToAbort, 
+        reason: '用户终止' 
+      }),
+    }).then(response => {
+      if (response.ok) {
+        console.log('[终止] 后端终止信号已发送')
+      }
+    }).catch(e => {
+      console.warn('[终止] 发送终止信号失败:', e)
+    })
+    
+    if (currentTask) {
+      try {
+        await updateTask({ ...currentTask, status: 'ready' })
+        console.log('[终止] 数据库状态已更新为 ready')
+      } catch (e) {
+        console.error('[终止] 更新任务状态失败:', e)
+      }
+      
+      setLogs(prev => [...prev, {
+        timestamp: new Date().toISOString(),
+        level: 'warning',
+        message: `✅ 任务已成功终止`,
+        details: { 
+          totalSteps: currentTask.steps.length,
+          taskId: currentTaskId,
+        },
+      }])
+      
+      message.success('任务已终止')
+      
+      setTimeout(() => {
+        setTerminatedTaskId(null)
+      }, 3000)
+    }
+  }, [abortController, runningTaskId, currentTestId, updateTask])
 
   const handleViewResult = (result: TestResult) => {
     setSelectedResult(result)
     setShowResultModal(true)
   }
+
+  const handleExportAllTasks = () => {
+    if (tasks.length === 0) {
+      message.warning('没有可导出的任务')
+      return
+    }
+    
+    try {
+      const dataStr = exportAllTasks()
+      const blob = new Blob([dataStr], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `all-tasks-${new Date().toISOString().split('T')[0]}.json`
+      link.click()
+      URL.revokeObjectURL(url)
+      message.success('导出成功')
+    } catch {
+      message.error('导出失败')
+    }
+  }
+
+  const handleDeleteTask = async (taskId: string) => {
+    if (runningTaskId === taskId) {
+      message.warning('无法删除正在执行的任务，请先终止执行')
+      return
+    }
+
+    Modal.confirm({
+      title: '确认删除',
+      content: '确定要删除这个任务吗？此操作不可恢复。',
+      okText: '删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await deleteTask(taskId)
+          message.success('任务已删除')
+        } catch {
+          message.error('删除失败')
+        }
+      },
+    })
+  }
+
+  const runningTask = runningTaskId ? tasks.find(t => t.id === runningTaskId) : null
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -482,139 +479,124 @@ export default function TestConsole() {
         alignItems: 'center',
         justifyContent: 'space-between',
       }}>
-        <Title level={3} style={{ color: 'white', margin: 0 }}>
-          🤖 Stagehand 自动化测试平台
-        </Title>
+        <Space>
+          <Title level={3} style={{ color: 'white', margin: 0 }}>
+            🤖 Stagehand 自动化测试平台
+          </Title>
+          {runningTask && (
+            <Badge status="processing" text={<span style={{ color: '#fff' }}>执行中: {runningTask.name}</span>} />
+          )}
+        </Space>
+        <Space>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => setShowNewTaskModal(true)}
+            disabled={!!runningTaskId}
+          >
+            新建任务
+          </Button>
+          <Button
+            icon={<ImportOutlined />}
+            onClick={initAllPresetTasks}
+            disabled={!!runningTaskId}
+          >
+            初始化预设
+          </Button>
+          <Button
+            icon={<ExportOutlined />}
+            onClick={handleExportAllTasks}
+            disabled={tasks.length === 0 || !!runningTaskId}
+          >
+            导出全部
+          </Button>
+          <Button
+            icon={<ReloadOutlined />}
+            onClick={() => window.location.reload()}
+            disabled={!!runningTaskId}
+          >
+            刷新
+          </Button>
+        </Space>
       </Header>
 
       <Layout>
-        <Sider width={400} style={{ height: 'calc(100vh - 64px)' }}>
-          <TaskSidebar
-            tasks={tasks}
-            selectedTask={selectedTask}
-            isLoading={isLoading}
-            isRunning={isRunning}
-            results={results}
-            presetTasks={presetTasks}
-            onSelectTask={handleSelectTask}
-            onDeleteTask={deleteTask}
-            onSaveAsTemplate={saveTaskAsTemplate}
-            onViewResult={handleViewResult}
-            onImportPresetTask={importPresetTask}
-            onInitAllPresetTasks={initAllPresetTasks}
-            onShowNewTaskModal={() => setShowNewTaskModal(true)}
-            onExportAllTasks={handleExportAllTasks}
-            getLatestResult={getLatestResult}
-          />
-        </Sider>
-
-        <Content style={{ padding: '24px', background: '#f5f5f5', minWidth: 500 }}>
-          {selectedTask ? (
-            <Card
-              title={
-                <Space>
-                  <FileTextOutlined />
-                  <span>当前任务: {selectedTask.name}</span>
-                  <Tag color={STATUS_COLORS[selectedTask.status]}>
-                    {STATUS_LABELS[selectedTask.status]}
-                  </Tag>
-                </Space>
-              }
-              extra={
-                <Button
-                  type="primary"
-                  icon={<PlayCircleOutlined />}
-                  loading={isRunning}
-                  onClick={startTest}
-                  disabled={steps.length === 0}
-                >
-                  {isRunning ? '执行中...' : '开始测试'}
-                </Button>
-              }
-            >
-              <Space style={{ marginBottom: 16 }}>
-                <Button
-                  type={activeTab === 'steps' ? 'primary' : 'default'}
-                  onClick={() => setActiveTab('steps')}
-                >
-                  步骤配置 ({steps.length})
-                </Button>
-                <Button
-                  type={activeTab === 'results' ? 'primary' : 'default'}
-                  onClick={() => setActiveTab('results')}
-                >
-                  执行结果
-                </Button>
-              </Space>
-
-              {activeTab === 'steps' && (
-                <>
-                  <StepEditor
-                    editingStepId={editingStepId}
-                    defaultStrategy={defaultStrategy}
-                    useHeadful={useHeadful}
-                    editForm={editForm}
-                    addForm={addForm}
-                    onAddStep={addStep}
-                    onSaveEditedStep={saveEditedStep}
-                    onCancelEdit={cancelEdit}
-                    onStrategyChange={setDefaultStrategy}
-                    onHeadfulChange={setUseHeadful}
-                  />
-                  <StepList
-                    steps={steps}
-                    isRunning={isRunning}
-                    onEditStep={startEditStep}
-                    onRemoveStep={removeStep}
-                    onExport={handleExport}
-                    onImport={handleImport}
-                  />
-                </>
-              )}
-
-              {activeTab === 'results' && (
-                <div>
-                  {(() => {
-                    const taskResults = results.get(selectedTask.id) || []
-                    return taskResults.length === 0 ? (
-                      <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>暂无执行结果</div>
-                    ) : (
-                      taskResults.map(result => (
-                        <Card
-                          key={result.id}
-                          size="small"
-                          style={{ marginBottom: 8, cursor: 'pointer' }}
-                          onClick={() => handleViewResult(result)}
-                        >
-                          <Space>
-                            <Tag color={result.status === 'success' ? 'success' : 'error'}>
-                              {result.status === 'success' ? '通过' : '失败'}
-                            </Tag>
-                            <Text>{new Date(result.executedAt).toLocaleString()}</Text>
-                            <Text type="secondary">{result.passedSteps}/{result.totalSteps} 步骤</Text>
-                          </Space>
-                        </Card>
-                      ))
-                    )
-                  })()}
-                </div>
-              )}
-            </Card>
-          ) : (
-            <Card>
-              <div style={{ textAlign: 'center', padding: 60 }}>
-                <Text type="secondary" style={{ fontSize: 16 }}>请从左侧选择一个任务或创建新任务</Text>
-                <br />
-                <Button type="primary" style={{ marginTop: 16 }} onClick={() => setShowNewTaskModal(true)}>
-                  创建新任务
-                </Button>
-              </div>
-            </Card>
+        <Content style={{ padding: '24px', background: '#f5f5f5' }}>
+          {runningTask && (
+            <Alert
+              message={`正在执行任务: ${runningTask.name}`}
+              description="任务执行期间，部分操作将被禁用。请在任务列表中点击终止按钮停止执行。"
+              type="info"
+              showIcon
+              style={{ marginBottom: 16 }}
+            />
           )}
+          
+          <Card 
+            title={
+              <Space>
+                <FileTextOutlined />
+                <span>任务列表 ({tasks.length})</span>
+              </Space>
+            }
+            style={{ marginBottom: 16 }}
+          >
+            {isDbLoading ? (
+              <div style={{ textAlign: 'center', padding: 40 }}>
+                <Spin size="large" tip="加载中..." />
+              </div>
+            ) : tasks.length === 0 ? (
+              <Empty description="暂无任务，请创建新任务或初始化预设任务">
+                <Space>
+                  <Button type="primary" onClick={() => setShowNewTaskModal(true)}>
+                    创建新任务
+                  </Button>
+                  <Button onClick={initAllPresetTasks}>
+                    初始化预设任务
+                  </Button>
+                </Space>
+              </Empty>
+            ) : (
+              <div style={{ 
+                display: 'grid', 
+                gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', 
+                gap: 16,
+                maxHeight: 'calc(100vh - 300px)',
+                overflowY: 'auto',
+                padding: 4,
+              }}>
+                {tasks.map(task => (
+                  <TaskCard
+                    key={task.id}
+                    task={task}
+                    isRunning={runningTaskId === task.id}
+                    isTerminated={terminatedTaskId === task.id}
+                    latestResult={getLatestResult(task.id)}
+                    onRun={() => startTest(task)}
+                    onStop={stopTest}
+                    onEdit={() => {
+                      const params = new URLSearchParams()
+                      params.set('taskId', task.id)
+                      router.push(`/workflow?${params.toString()}`)
+                    }}
+                    onDelete={() => handleDeleteTask(task.id)}
+                    onViewResult={handleViewResult}
+                    onSaveAsTemplate={() => saveTaskAsTemplate(task)}
+                    isDisabled={!!runningTaskId && runningTaskId !== task.id}
+                  />
+                ))}
+              </div>
+            )}
+          </Card>
         </Content>
 
         <Sider width={450} style={{ background: '#fff', padding: '16px', borderLeft: '1px solid #f0f0f0' }}>
-          <LogPanel logs={logs} isRunning={isRunning} onClear={() => setLogs([])} />
+          <LogPanel 
+            logs={logs} 
+            isRunning={!!runningTaskId} 
+            onClear={() => setLogs([])}
+            taskName={runningTask?.name}
+          />
         </Sider>
       </Layout>
 
@@ -622,11 +604,15 @@ export default function TestConsole() {
         open={showNewTaskModal}
         taskTemplates={taskTemplates}
         onClose={() => setShowNewTaskModal(false)}
-        onCreateTask={createTask}
+        onCreateTask={async (name, description, steps, tags) => {
+          const newTask = await createTask(name, description, steps, tags)
+          return newTask
+        }}
         onTaskCreated={(task) => {
-          setSelectedTask(task)
           setShowNewTaskModal(false)
-          message.success('任务创建成功')
+          const params = new URLSearchParams()
+          params.set('taskId', task.id)
+          router.push(`/workflow?${params.toString()}`)
         }}
         onDeleteTemplate={deleteTemplate}
       />

@@ -1,6 +1,6 @@
 // ==================== 操作类型 ====================
 
-export type TestStepType = 'goto' | 'click' | 'fill' | 'hover' | 'screenshot' | 'wait' | 'scroll' | 'clear' | 'js' | 'followGuide' | 'condition'
+export type TestStepType = 'goto' | 'click' | 'fill' | 'hover' | 'screenshot' | 'wait' | 'scroll' | 'clear' | 'js' | 'extract' | 'followGuide' | 'condition' | 'assert' | 'conditionLoop' | 'gotoStep'
 
 // ==================== 元素选择器配置 ====================
 
@@ -80,6 +80,31 @@ export interface TestStep {
   loop?: boolean
   /** followGuide 循环模式：最大循环次数（默认50，防止死循环） */
   maxLoopIterations?: number
+  /**
+   * condition 条件判断步骤：
+   * 本步骤执行成功后，执行 thenSteps 中的步骤
+   * 执行失败后，执行后续步骤
+   */
+  thenSteps?: TestStep[]
+  /**
+   * conditionLoop 条件循环步骤：
+   * conditionStep 执行成功后，执行 loopSteps 中的步骤，然后回到 conditionStep 重新判断
+   * conditionStep 执行失败或超过 maxIterations 次后，执行后续步骤
+   */
+  loopSteps?: TestStep[]
+  /** conditionLoop 特有：最大循环次数（默认10，防止死循环） */
+  maxIterations?: number
+  /**
+   * conditionLoop 特有：循环条件步骤
+   * 这是一个完整的步骤配置，可以是任何类型（click、fill、condition等）
+   * 执行成功 = 条件满足，执行失败 = 条件不满足
+   */
+  conditionStep?: TestStep
+  /**
+   * gotoStep 节点选择特有：
+   * 要跳转到的目标步骤 ID，执行时会跳转到该步骤继续执行
+   */
+  targetStepId?: string
 }
 
 // ==================== 测试任务 ====================
@@ -116,6 +141,14 @@ export interface StepExecutionRecord {
   maskScreenshot?: string // 关闭 mask 时的截图
   frameName?: string // 元素所在的 iframe 名称
   guideBubbleInfo?: GuideBubbleInfo // 检测到的引导气泡信息（followGuide 步骤专用）
+  result?: string // JS 步骤的执行结果
+  extractedData?: string // extract 步骤的提取数据
+  /** 子步骤执行记录（condition/conditionLoop 步骤使用） */
+  subStepRecords?: StepExecutionRecord[]
+  /** 循环执行记录（conditionLoop 步骤使用） */
+  loopRecords?: StepExecutionRecord[]
+  /** 循环次数（conditionLoop 步骤使用） */
+  loopCount?: number
 }
 
 /**
@@ -155,31 +188,6 @@ export interface TestResult {
     viewport: string
     headless: boolean
   }
-}
-
-// ==================== 条件判断步骤 ====================
-
-/**
- * 条件类型
- */
-export type ConditionType = 'elementExists' | 'elementVisible' | 'textMatch' | 'attributeMatch'
-
-/**
- * 条件配置
- */
-export interface ConditionConfig {
-  type: ConditionType
-  selector: ElementSelector
-  value?: string // 用于文本匹配或属性匹配
-}
-
-/**
- * 条件判断步骤
- */
-export interface ConditionStep extends TestStep {
-  condition: ConditionConfig
-  thenSteps: TestStep[] // 条件满足时执行的步骤
-  elseSteps?: TestStep[] // 条件不满足时执行的步骤（可选）
 }
 
 // ==================== 日志条目 ====================

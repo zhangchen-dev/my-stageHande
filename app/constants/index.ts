@@ -12,6 +12,8 @@ export const STEP_TYPES: { value: TestStepType; label: string; icon: string }[] 
   { value: 'clear', label: '清除状态', icon: '🗑️' },
   { value: 'followGuide', label: '跟随指引', icon: '🎯' },
   { value: 'condition', label: '条件判断', icon: '🔍' },
+  { value: 'conditionLoop', label: '条件循环', icon: '🔄' },
+  { value: 'gotoStep', label: '节点选择', icon: '🔗' },
 ]
 
 export const STRATEGIES: { value: ExecutionStrategy; label: string; desc: string }[] = [

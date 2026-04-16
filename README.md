@@ -149,3 +149,7 @@ OPENAI_API_KEY=your_api_key
 - **AI 模型**: Qwen/Qwen3-VL-32B-Instruct
 - **存储**: IndexedDB（浏览器本地）
 - **日志**: Winston
+
+
+
+基于工作流思想，帮我实现任务编排的流程，其中背后代码的逻辑基于这个sdk,基于现在的代码优化，删除无用的代码逻辑，你有权限删除。

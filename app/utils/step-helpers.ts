@@ -4,19 +4,17 @@ export function generateId(): string {
   return `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
 }
 
-export function cleanSelector(selector?: ElementSelector): ElementSelector | undefined {
-  if (!selector) return undefined
+export function cleanSelector(selector?: ElementSelector): ElementSelector {
+  if (!selector) return {}
   const cleaned: ElementSelector = {}
-  let hasValue = false
   const keys = Object.keys(selector) as (keyof ElementSelector)[]
   for (const key of keys) {
     const val = selector[key]
     if (val !== undefined && val !== null && val !== '') {
       cleaned[key] = val
-      hasValue = true
     }
   }
-  return hasValue ? cleaned : undefined
+  return cleaned
 }
 
 export function cleanCondition(condition: any, value?: string): any {

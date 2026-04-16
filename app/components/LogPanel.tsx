@@ -1,12 +1,14 @@
 'use client'
 
 import { useRef, useEffect } from 'react'
-import { Card, Typography, Badge, Button, Space } from 'antd'
+import { Card, Typography, Badge, Button, Space, Alert } from 'antd'
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
   InfoCircleOutlined,
   ThunderboltOutlined,
+  StopOutlined,
+  ClearOutlined,
 } from '@ant-design/icons'
 import { LogEntry } from '@/types'
 
@@ -16,9 +18,11 @@ interface LogPanelProps {
   logs: LogEntry[]
   isRunning: boolean
   onClear: () => void
+  onStop?: () => void
+  taskName?: string
 }
 
-export default function LogPanel({ logs, isRunning, onClear }: LogPanelProps) {
+export default function LogPanel({ logs, isRunning, onClear, onStop, taskName }: LogPanelProps) {
   const logsEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -35,17 +39,44 @@ export default function LogPanel({ logs, isRunning, onClear }: LogPanelProps) {
         </Space>
       }
       extra={
-        logs.length > 0 && (
-          <Button type="text" size="small" onClick={onClear}>
-            清空
-          </Button>
-        )
+        <Space>
+          {isRunning && onStop && (
+            <Button 
+              type="primary" 
+              danger 
+              size="small" 
+              icon={<StopOutlined />}
+              onClick={onStop}
+            >
+              终止执行
+            </Button>
+          )}
+          {logs.length > 0 && (
+            <Button 
+              type="text" 
+              size="small" 
+              icon={<ClearOutlined />}
+              onClick={onClear}
+            >
+              清空
+            </Button>
+          )}
+        </Space>
       }
       style={{ height: '100%' }}
     >
+      {isRunning && taskName && (
+        <Alert
+          message={`正在执行: ${taskName}`}
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+        />
+      )}
+      
       <div
         style={{
-          height: 'calc(100vh - 200px)',
+          height: 'calc(100vh - 280px)',
           overflowY: 'auto',
           background: '#1e1e1e',
           padding: '16px',
@@ -56,7 +87,7 @@ export default function LogPanel({ logs, isRunning, onClear }: LogPanelProps) {
       >
         {logs.length === 0 ? (
           <Text type="secondary" style={{ fontFamily: 'inherit' }}>
-            等待开始测试...
+            {isRunning ? '等待执行...' : '选择一个任务开始执行，或编辑任务配置步骤'}
           </Text>
         ) : (
           logs.map((log, index) => (

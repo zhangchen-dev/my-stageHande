@@ -1,11 +1,12 @@
 'use client'
 
-import { Form, Input, Select, Row, Col, Button, Space, Typography, Divider, Switch } from 'antd'
+import { useState, useEffect } from 'react'
+import { Form, Input, Select, Row, Col, Button, Space, Typography, Divider, Switch, Card, message, Tag } from 'antd'
 import type { FormInstance } from 'antd'
 import { PlusOutlined, SaveOutlined, CloseOutlined } from '@ant-design/icons'
 import { TestStep, TestStepType, ElementSelector, ExecutionStrategy } from '@/types'
-import { STEP_TYPES, STRATEGIES } from '@/app/constants'
-import { cleanSelector, cleanCondition } from '@/app/utils/step-helpers'
+import { STEP_TYPES, STRATEGIES, getStepTypeLabel } from '@/app/constants'
+import { cleanSelector } from '@/app/utils/step-helpers'
 
 const { Option } = Select
 const { Text } = Typography
@@ -16,11 +17,11 @@ export interface FormValues {
   selector?: ElementSelector
   strategy?: ExecutionStrategy
   value?: string
-  condition?: {
-    type?: string
-    selector?: ElementSelector
-    value?: string
-  }
+  maxIterations?: number
+  thenSteps?: TestStep[]
+  loopSteps?: TestStep[]
+  conditionStep?: TestStep
+  targetStepId?: string // gotoStep 特有：目标步骤 ID
 }
 
 type FormType = FormInstance<FormValues>
@@ -31,6 +32,7 @@ interface StepEditorProps {
   useHeadful: boolean
   editForm: FormType
   addForm: FormType
+  steps: TestStep[] // 当前任务的所有步骤（用于 gotoStep 选择）
   onAddStep: (values: FormValues) => void
   onSaveEditedStep: (values: FormValues) => void
   onCancelEdit: () => void
@@ -38,7 +40,7 @@ interface StepEditorProps {
   onHeadfulChange: (headful: boolean) => void
 }
 
-function SelectorFields({ prefix, form }: { prefix: string; form: FormType }) {
+function SelectorFields({ prefix }: { prefix: string; form: FormType }) {
   return (
     <>
       <Row gutter={16}>
@@ -96,46 +98,30 @@ function SelectorFields({ prefix, form }: { prefix: string; form: FormType }) {
   )
 }
 
-function ConditionFields({ form }: { form: FormType }) {
-  return (
-    <div style={{ marginTop: 16, padding: 12, background: '#f0f5ff', borderRadius: 8 }}>
-      <Text strong style={{ marginBottom: 8, display: 'block' }}>条件配置</Text>
-      <Row gutter={16}>
-        <Col span={8}>
-          <Form.Item name="condition.type" label="条件类型">
-            <Select placeholder="选择条件类型">
-              <Option value="elementExists">元素存在</Option>
-              <Option value="elementVisible">元素可见</Option>
-              <Option value="textMatch">文本匹配</Option>
-              <Option value="attributeMatch">属性匹配</Option>
-            </Select>
-          </Form.Item>
-        </Col>
-        <Col span={16}>
-          <Form.Item name="conditionValue" label="匹配值（可选）">
-            <Input placeholder="例如：aaa（文本匹配时填写）" />
-          </Form.Item>
-        </Col>
-      </Row>
-      <SelectorFields prefix="condition.selector" form={form} />
-      <Text type="secondary">条件满足/不满足时的子步骤暂不支持在表单中编辑</Text>
-    </div>
-  )
-}
-
 function StepFormFields({
   form,
   defaultStrategy,
-  isEdit,
+  steps,
 }: {
   form: FormType
   defaultStrategy: ExecutionStrategy
-  isEdit: boolean
+  steps: TestStep[]
 }) {
   const stepType = Form.useWatch('type', form)
-  const strategy = Form.useWatch('strategy', form)
-  const isCondition = stepType === 'condition'
-  const showSelector = strategy === 'selector' && !isCondition
+  const showSelector = defaultStrategy === 'selector'
+  const isGotoStep = stepType === 'gotoStep'
+  const targetStepId = Form.useWatch('targetStepId', form)
+
+  useEffect(() => {
+    if (isGotoStep && targetStepId) {
+      const targetIndex = steps.findIndex(s => s.id === targetStepId)
+      if (targetIndex !== -1) {
+        const targetStep = steps[targetIndex]
+        const autoDescription = `跳转到第 ${targetIndex + 1} 步: ${targetStep.description || targetStep.type}`
+        form.setFieldsValue({ description: autoDescription })
+      }
+    }
+  }, [isGotoStep, targetStepId, steps, form])
 
   return (
     <>
@@ -150,49 +136,95 @@ function StepFormFields({
           </Form.Item>
         </Col>
         <Col span={16}>
-          <Form.Item
-            name="description"
-            label={isCondition ? '条件描述' : (defaultStrategy === 'ai' ? 'AI 描述 (详细描述要操作的元素)' : '操作描述')}
-            rules={[{ required: true }]}
-          >
-            <Input placeholder={
-              isCondition
-                ? '例如：如果能找到元素A且展示文案是"aaa"'
-                : (defaultStrategy === 'ai'
-                    ? '例如：点击页面中央的蓝色"开始演示"按钮'
-                    : '描述要执行的操作')
-            } />
-          </Form.Item>
+          {!isGotoStep ? (
+            <Form.Item
+              name="description"
+              label={defaultStrategy === 'ai' ? 'AI 描述 (详细描述要操作的元素)' : '操作描述'}
+              rules={[{ required: true }]}
+            >
+              <Input placeholder={
+                defaultStrategy === 'ai'
+                  ? '例如：点击页面中央的蓝色"开始演示"按钮'
+                  : '描述要执行的操作'
+              } />
+            </Form.Item>
+          ) : (
+            <Form.Item name="description" style={{ marginBottom: 0 }}>
+              <Input 
+                disabled 
+                placeholder="选择目标步骤后自动生成" 
+                style={{ background: '#f5f5f5' }}
+              />
+            </Form.Item>
+          )}
         </Col>
       </Row>
 
-      {isCondition && <ConditionFields form={form} />}
+      {!isGotoStep && (
+        <Row gutter={16}>
+          <Col span={24}>
+            <Form.Item name="value" label="值 (URL/输入内容/等待毫秒)">
+              <Input placeholder="根据操作类型填写" />
+            </Form.Item>
+          </Col>
+        </Row>
+      )}
 
-      {!isCondition && (
-        <>
-          <Row gutter={16}>
-            <Col span={24}>
-              <Form.Item name="value" label="值 (URL/输入内容/等待毫秒)">
-                <Input placeholder="根据操作类型填写" />
-              </Form.Item>
-            </Col>
-          </Row>
+      {showSelector && (
+        <div style={{ marginTop: 8, padding: 12, background: '#f9f0ff', borderRadius: 8 }}>
+          <Text strong style={{ marginBottom: 8, display: 'block' }}>选择器配置</Text>
+          <SelectorFields prefix="selector" form={form} />
+        </div>
+      )}
 
-          {showSelector && (
-            <div style={{ marginTop: 8, padding: 12, background: '#f9f0ff', borderRadius: 8 }}>
-              <Text strong style={{ marginBottom: 8, display: 'block' }}>选择器配置</Text>
-              <SelectorFields prefix="selector" form={form} />
-            </div>
-          )}
+      {isGotoStep && steps.length > 0 && (
+        <div style={{ marginTop: 8, padding: 12, background: '#fff7e6', borderRadius: 8 }}>
+          <Text strong style={{ marginBottom: 8, display: 'block' }}>🔗 选择要跳转到的步骤</Text>
+          <Form.Item 
+            name="targetStepId" 
+            label="目标步骤" 
+            rules={[{ required: true, message: '请选择要跳转的目标步骤' }]}
+          >
+            <Select 
+              placeholder="选择一个步骤作为跳转目标"
+              showSearch
+              optionFilterProp="label"
+            >
+              {steps.map((step, index) => (
+                <Option 
+                  key={step.id} 
+                  value={step.id}
+                  label={`${index + 1}. ${step.description || step.type}`}
+                >
+                  <Space>
+                    <Text type="secondary">{index + 1}.</Text>
+                    <Tag>{getStepTypeLabel(step.type)}</Tag>
+                    <Text>{step.description || '未命名步骤'}</Text>
+                  </Space>
+                </Option>
+              ))}
+            </Select>
+          </Form.Item>
+          <Text type="secondary" style={{ display: 'block', fontSize: 12 }}>
+            💡 执行到此步骤时，将跳转到选定的步骤继续执行。可用于实现循环或条件跳转。
+          </Text>
+        </div>
+      )}
 
-          {strategy === 'ai' && !isCondition && (
-            <div style={{ marginTop: 8, padding: 12, background: '#fff7e6', borderRadius: 8 }}>
-              <Text type="secondary">
-                💡 提示：AI 描述越详细，识别准确率越高。建议包含元素的位置、颜色、文本内容等信息。
-              </Text>
-            </div>
-          )}
-        </>
+      {isGotoStep && steps.length === 0 && (
+        <div style={{ marginTop: 8, padding: 12, background: '#fff1f0', borderRadius: 8 }}>
+          <Text type="warning">
+            ⚠️ 当前没有可用的步骤，请先添加其他步骤后再使用节点选择功能
+          </Text>
+        </div>
+      )}
+
+      {(stepType === 'condition' || stepType === 'conditionLoop') && (
+        <div style={{ marginTop: 8, padding: 12, background: '#e6f7ff', borderRadius: 8 }}>
+          <Text type="secondary">
+            💡 提示：此类型的步骤支持子步骤。保存后可在下方步骤列表中展开并管理子步骤。
+          </Text>
+        </div>
       )}
     </>
   )
@@ -204,6 +236,7 @@ export default function StepEditor({
   useHeadful,
   editForm,
   addForm,
+  steps,
   onAddStep,
   onSaveEditedStep,
   onCancelEdit,
@@ -227,8 +260,6 @@ export default function StepEditor({
       background: '#fafafa',
       borderRadius: 8,
       marginBottom: 16,
-      maxHeight: 'calc(100vh - 300px)',
-      overflowY: 'auto',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 24, marginBottom: 16, flexWrap: 'nowrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap' }}>
@@ -253,20 +284,31 @@ export default function StepEditor({
       <Divider style={{ margin: '12px 0' }} />
 
       {editingStepId ? (
-        <Form key={editingStepId} form={editForm} layout="vertical" onFinish={handleEditSubmit}>
-          <StepFormFields form={editForm} defaultStrategy={defaultStrategy} isEdit={true} />
-          <Space>
-            <Button type="primary" icon={<SaveOutlined />} htmlType="submit">保存</Button>
-            <Button icon={<CloseOutlined />} onClick={onCancelEdit}>取消</Button>
-          </Space>
-        </Form>
+        <Card 
+          size="small" 
+          title={`编辑步骤 #${editingStepId.slice(-6)}`}
+          extra={
+            <Button type="link" danger onClick={onCancelEdit}>
+              取消编辑
+            </Button>
+          }
+        >
+          <Form key={editingStepId} form={editForm} layout="vertical" onFinish={handleEditSubmit}>
+            <StepFormFields form={editForm} defaultStrategy={defaultStrategy} steps={steps} />
+            <Space>
+              <Button type="primary" icon={<SaveOutlined />} htmlType="submit">保存修改</Button>
+            </Space>
+          </Form>
+        </Card>
       ) : (
-        <Form form={addForm} layout="vertical" onFinish={handleAddSubmit}>
-          <StepFormFields form={addForm} defaultStrategy={defaultStrategy} isEdit={false} />
-          <Button type="dashed" icon={<PlusOutlined />} htmlType="submit" block>
-            添加步骤
-          </Button>
-        </Form>
+        <Card size="small" title="➕ 添加新步骤（顶层）">
+          <Form form={addForm} layout="vertical" onFinish={handleAddSubmit}>
+            <StepFormFields form={addForm} defaultStrategy={defaultStrategy} steps={steps} />
+            <Button type="primary" icon={<PlusOutlined />} htmlType="submit" block>
+              添加步骤
+            </Button>
+          </Form>
+        </Card>
       )}
     </div>
   )
@@ -279,17 +321,19 @@ function processFormValues(values: FormValues, defaultStrategy: ExecutionStrateg
     strategy: defaultStrategy,
   }
 
+  if (values.value) result.value = values.value
+
+  if (defaultStrategy === 'selector') {
+    result.selector = cleanSelector(values.selector)
+  }
+
   if (values.type === 'condition') {
-    result.condition = {
-      type: values.condition?.type || 'elementExists',
-      selector: cleanSelector(values.condition?.selector),
-      value: (values as any).conditionValue || values.condition?.value,
-    }
-  } else {
-    if (values.value) result.value = values.value
-    if (defaultStrategy === 'selector') {
-      result.selector = cleanSelector(values.selector)
-    }
+    result.thenSteps = []
+  } else if (values.type === 'conditionLoop') {
+    result.maxIterations = values.maxIterations || 10
+    result.loopSteps = []
+  } else if (values.type === 'gotoStep') {
+    result.targetStepId = values.targetStepId
   }
 
   return result

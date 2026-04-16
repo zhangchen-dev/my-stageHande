@@ -2,16 +2,11 @@ import { NextRequest } from 'next/server'
 import { Stagehand } from '@browserbasehq/stagehand'
 import { initDirectories, PATHS } from '@/utils/file'
 import { logger } from '@/utils/logger'
-import { TestStep, TestTask, LogEntry, ElementSelector, ExecutionStrategy } from '@/types'
-import path from 'path'
-import fs from 'fs'
-import { executeStep, toExecutionRecord } from '@/lib/executor'
-import { StepExecutionRecord } from '@/types'
+import { TestStep, LogEntry, ExecutionStrategy, StepExecutionRecord } from '@/types'
+import { executeTest } from '@/lib/executor'
+import { registerTask, unregisterTask, abortTask, isTaskAborted, getAbortReason, hasRunningTasks } from '@/lib/task-manager'
 
 export const dynamic = 'force-dynamic'
-
-// 支持的策略列表
-const STRATEGIES: ExecutionStrategy[] = ['selector', 'ai', 'screenshot', 'auto']
 
 export async function POST(req: NextRequest) {
   initDirectories()
@@ -19,23 +14,19 @@ export async function POST(req: NextRequest) {
   const steps: TestStep[] = requestData.steps
   const useHeadful: boolean = requestData.useHeadful || false
   const defaultStrategy: ExecutionStrategy = requestData.strategy || 'auto'
-  
-  // 获取自定义截图输出目录（默认保存到项目 public/screenshots）
   const customScreenshotDir = requestData.screenshotOutputDir || undefined
+  const testId: string = requestData.testId || `test_${Date.now()}`
   
-  // 如果指定了自定义目录，确保它存在
   if (customScreenshotDir) {
     try {
+      const fs = await import('fs')
       fs.mkdirSync(customScreenshotDir, { recursive: true })
       console.log(`[Test] 截图将保存到自定义目录: ${customScreenshotDir}`)
     } catch (e) {
       console.warn(`[Test] 无法创建截图目录 ${customScreenshotDir}, 使用默认目录`)
     }
   }
-  
-  const testId = `test_${Date.now()}`
   const startTime = Date.now()
-  const executionRecords: StepExecutionRecord[] = []
 
   const encoder = new TextEncoder()
   const stream = new ReadableStream({
@@ -45,11 +36,8 @@ export async function POST(req: NextRequest) {
       }
 
       let stagehand: Stagehand | null = null
-      let page: any = null
       
       try {
-        // 1. 初始化 Stagehand
-        // 使用用户配置的 API Key 和 Base URL
         const apiKey = process.env.SILICONFLOW_API_KEY || process.env.OPENAI_API_KEY || ''
         const baseURL = process.env.AI_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.siliconflow.cn/v1'
 
@@ -76,7 +64,9 @@ export async function POST(req: NextRequest) {
         })
         await stagehand.init()
         
-        page = stagehand.context.pages()[0]
+        registerTask(testId, stagehand)
+        
+        const page = stagehand.context.pages()[0]
 
         sendLog({
           timestamp: new Date().toISOString(),
@@ -85,150 +75,98 @@ export async function POST(req: NextRequest) {
           details: { strategy: defaultStrategy, headless: !useHeadful },
         })
 
-        // 2. 执行测试步骤
-        for (let i = 0; i < steps.length; i++) {
-          const step = steps[i]
-          const strategy = step.strategy || defaultStrategy
-          
-          sendLog({
-            timestamp: new Date().toISOString(),
-            level: 'info',
-            message: `[步骤 ${i + 1}/${steps.length}] ${step.type}: ${step.description}`,
-            stepId: step.id,
-            details: { strategy, selector: step.selector },
-          })
-
-          try {
-            // 使用执行引擎执行步骤
-            const stepRecord = await executeStep(stagehand, page, step, testId, strategy, customScreenshotDir)
-            
-            // 处理循环模式返回的多条记录（如 followGuide loop）
-            const loopRecords = (stepRecord as unknown as Record<string, unknown>)._loopRecords as StepExecutionRecord[] | undefined
-            if (loopRecords && loopRecords.length > 0) {
-              // 循环模式：将每轮迭代作为独立记录
-              executionRecords.push(...loopRecords)
-              
-              for (const iterRecord of loopRecords) {
-                sendLog({
-                  timestamp: iterRecord.endTime || new Date().toISOString(),
-                  level: iterRecord.status === 'success' ? 'success' : iterRecord.status === 'skipped' ? 'info' : 'error',
-                  message: iterRecord.status === 'success'
-                    ? `🔄 ${iterRecord.description}`
-                    : iterRecord.status === 'skipped'
-                      ? `⏹️ ${iterRecord.description}`
-                      : `❌ ${iterRecord.description} - ${iterRecord.error}`,
-                  stepId: iterRecord.stepId,
-                  screenshot: iterRecord.screenshot,
-                  details: { duration: iterRecord.duration },
-                })
-              }
-              
-              // 发送循环汇总
-              sendLog({
-                timestamp: stepRecord.endTime || new Date().toISOString(),
-                level: (stepRecord as unknown as Record<string, unknown>)._loopTotalIterations as number > 0 ? 'success' : 'info',
-                message: `🔄 循环完成！共 ${(stepRecord as unknown as Record<string, unknown>)._loopTotalIterations} 轮，成功 ${loopRecords.filter(r => r.status === 'success').length}/${loopRecords.length} 轮`,
-                stepId: step.id,
-                screenshot: stepRecord.screenshot,
-                details: {
-                  totalIterations: (stepRecord as unknown as Record<string, unknown>)._loopTotalIterations,
-                  successCount: loopRecords.filter(r => r.status === 'success').length,
-                  duration: stepRecord.duration,
-                  strategy: stepRecord.strategy,
-                },
-              })
-            } else {
-              // 非循环模式：正常记录
-              executionRecords.push(stepRecord)
-              
-              // 发送执行记录
-              sendLog({
-                timestamp: stepRecord.endTime || new Date().toISOString(),
-                level: stepRecord.status === 'success' ? 'success' : 'error',
-                message: stepRecord.status === 'success' 
-                  ? `✅ ${stepRecord.description} (策略: ${stepRecord.strategy})`
-                  : `❌ ${stepRecord.description} - ${stepRecord.error}`,
-                stepId: step.id,
-                screenshot: stepRecord.screenshot,
-                details: {
-                  strategy: stepRecord.strategy,
-                  duration: stepRecord.duration,
-                  aiConfidence: stepRecord.aiConfidence,
-                  selectorUsed: stepRecord.selectorUsed,
-                },
-              })
-            }
-
-            // 如果步骤失败，可以选择继续或停止
-            if (stepRecord.status === 'failed') {
-              const continueOnError = requestData.continueOnError
-              if (!continueOnError) {
-                throw new Error(stepRecord.error || '步骤执行失败')
-              }
-            }
-
-            // 步骤间短暂缓冲
-            await new Promise(resolve => setTimeout(resolve, 300))
-          } catch (stepError) {
-            const errorRecord: StepExecutionRecord = {
-              stepId: step.id,
-              stepType: step.type,
-              description: step.description,
-              strategy,
-              status: 'failed',
-              startTime: new Date().toISOString(),
-              endTime: new Date().toISOString(),
-              error: (stepError as Error).message,
-            }
-            executionRecords.push(errorRecord)
-            
+        const result = await executeTest(
+          stagehand,
+          page,
+          steps,
+          testId,
+          defaultStrategy,
+          (message: string) => {
+            if (isTaskAborted(testId)) return
             sendLog({
               timestamp: new Date().toISOString(),
-              level: 'error',
-              message: `❌ 步骤失败: ${step.description} - ${(stepError as Error).message}`,
-              stepId: step.id,
+              level: 'info',
+              message,
             })
-            
-            throw stepError
+          },
+          customScreenshotDir,
+          testId
+        )
+
+        if (isTaskAborted(testId)) {
+          sendLog({
+            timestamp: new Date().toISOString(),
+            level: 'warning',
+            message: `⚹️ 任务已被终止: ${getAbortReason(testId)}`,
+            details: { testId, aborted: true },
+          })
+        } else {
+          for (const record of result.records) {
+            sendLog({
+              timestamp: record.endTime || new Date().toISOString(),
+              level: record.status === 'success' ? 'success' : record.status === 'failed' ? 'error' : 'info',
+              message: record.status === 'success'
+                ? `✅ ${record.description} (策略: ${record.strategy})`
+                : record.status === 'failed'
+                  ? `❌ ${record.description} - ${record.error}`
+                  : `⏹️ ${record.description}`,
+              stepId: record.stepId,
+              screenshot: record.screenshot,
+              details: {
+                strategy: record.strategy,
+                duration: record.duration,
+                aiConfidence: record.aiConfidence,
+                selectorUsed: record.selectorUsed,
+              },
+            })
           }
+
+          const passedSteps = result.records.filter(r => r.status === 'success').length
+          const failedSteps = result.records.filter(r => r.status === 'failed').length
+          const totalDuration = Date.now() - startTime
+
+          sendLog({
+            timestamp: new Date().toISOString(),
+            level: result.success ? 'success' : 'error',
+            message: result.success
+              ? `✅ 测试完成！通过: ${passedSteps}, 失败: ${failedSteps}, 耗时: ${(totalDuration / 1000).toFixed(1)}s`
+              : `❌ 测试失败！通过: ${passedSteps}, 失败: ${failedSteps}, 耗时: ${(totalDuration / 1000).toFixed(1)}s`,
+            details: {
+              totalSteps: steps.length,
+              passedSteps,
+              failedSteps,
+              totalDuration,
+              success: result.success,
+              error: result.error,
+            },
+          })
         }
 
-        // 3. 计算执行结果统计
-        const passedSteps = executionRecords.filter(r => r.status === 'success').length
-        const failedSteps = executionRecords.filter(r => r.status === 'failed').length
-        const totalDuration = Date.now() - startTime
-
-        sendLog({
-          timestamp: new Date().toISOString(),
-          level: failedSteps > 0 ? 'warning' : 'success',
-          message: `🎉 测试完成！通过: ${passedSteps}/${steps.length}，耗时: ${(totalDuration / 1000).toFixed(1)}s`,
-          details: {
-            totalSteps: steps.length,
-            passedSteps,
-            failedSteps,
-            duration: totalDuration,
-            executionRecords: executionRecords.map(toExecutionRecord),
-          },
-        })
+        controller.close()
 
       } catch (error) {
-        const totalDuration = Date.now() - startTime
-        logger.error(`测试任务 ${testId} 异常终止`, { error: (error as Error).stack })
+        logger.error('测试执行失败', error as Error)
         
         sendLog({
           timestamp: new Date().toISOString(),
           level: 'error',
           message: `💥 测试异常终止: ${(error as Error).message}`,
-          details: {
-            duration: totalDuration,
-            executionRecords: executionRecords.map(toExecutionRecord),
-          },
+          details: { error: (error as Error).stack },
         })
-      } finally {
-        if (stagehand) await stagehand.close()
+        
         controller.close()
+      } finally {
+        unregisterTask(testId)
+        if (stagehand) {
+          try {
+            await stagehand.close()
+            logger.info('Stagehand 已关闭')
+          } catch (closeError) {
+            logger.error('关闭 Stagehand 失败', closeError as Error)
+          }
+        }
       }
-    },
+    }
   })
 
   return new Response(stream, {
@@ -240,23 +178,23 @@ export async function POST(req: NextRequest) {
   })
 }
 
-// GET 请求 - 获取支持的策略列表
 export async function GET() {
-  return Response.json({
-    strategies: STRATEGIES.map(s => ({
-      value: s,
-      label: {
-        selector: '精确选择器（id/class/xpath）',
-        ai: 'AI 智能识别',
-        screenshot: '截图匹配',
-        auto: '自动选择（推荐）',
-      }[s],
-      description: {
-        selector: '使用 id、class、xpath 等精确选择器定位元素，速度快但需要准确的选择器',
-        ai: '使用 AI 模型识别页面元素，适合复杂或动态页面',
-        screenshot: '基于截图对比定位元素，适合视觉回归测试',
-        auto: '自动选择最优策略，优先选择器其次 AI',
-      }[s],
-    })),
+  return Response.json({ 
+    hasRunningTasks: hasRunningTasks(),
+  })
+}
+
+export async function PUT(req: NextRequest) {
+  const { testId, reason } = await req.json().catch(() => ({ testId: '', reason: '用户终止' }))
+  
+  if (!testId) {
+    return Response.json({ success: false, error: '缺少 testId 参数' }, { status: 400 })
+  }
+  
+  const success = abortTask(testId, reason)
+  
+  return Response.json({ 
+    success, 
+    message: success ? `终止信号已发送给任务 ${testId}` : `未找到运行中的任务 ${testId}` 
   })
 }
