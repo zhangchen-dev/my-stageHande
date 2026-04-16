@@ -103,11 +103,13 @@ export default function WorkflowEditor() {
   }
 
   const createNewWorkflow = () => {
+    const startNodeId = `node_${Date.now()}`
     const newConfig: WorkflowConfig = {
-      startNodeId: 'node_start',
+      startNodeId: startNodeId,
       nodes: [
         {
-          id: 'node_start',
+          id: startNodeId,
+          name: '开始节点',
           type: OperationType.OPEN_PAGE,
           strategy: ExecuteStrategy.AUTO,
           params: { url: '' },
@@ -116,6 +118,7 @@ export default function WorkflowEditor() {
       ],
     }
     
+    console.log('[createNewWorkflow] 创建新工作流:', { startNodeId, nodes: newConfig.nodes })
     setConfig(newConfig)
     setOriginalConfig(null)
     setTaskName('新工作流')
@@ -154,6 +157,7 @@ export default function WorkflowEditor() {
 
       const node: WorkflowNode = {
         id: nodeId,
+        name: `${getTypeLabel(nodeType)} #${nodeIdCounter - 1}`,
         type: nodeType,
         strategy: (step.strategy?.toUpperCase() as ExecuteStrategy) || ExecuteStrategy.AUTO,
         params: {
@@ -196,6 +200,12 @@ export default function WorkflowEditor() {
         updatedAt: new Date().toISOString(),
       }
 
+      console.log('[saveWorkflow] 保存工作流:', { 
+        id: workflowId, 
+        name: taskName, 
+        nodesCount: config.nodes.length,
+      })
+
       const db = await openDB()
       const store = db.transaction('tasks', 'readwrite').objectStore('tasks')
       const request = store.put(taskData)
@@ -206,7 +216,7 @@ export default function WorkflowEditor() {
         setIsSaved(true)
         
         message.success({
-          content: '✓ 工作流已保存',
+          content: `✓ 工作流已保存 (${config.nodes.length} 节点)`,
           icon: <CheckCircleOutlined style={{ color: '#52c41a' }} />,
         })
 
@@ -232,8 +242,10 @@ export default function WorkflowEditor() {
 
   const addNode = (type: OperationType, afterNodeId?: string) => {
     const newNodeId = `node_${Date.now()}`
+    const nodeIndex = config.nodes.length + 1
     const newNode: WorkflowNode = {
       id: newNodeId,
+      name: `${getTypeLabel(type)} #${nodeIndex}`,
       type,
       strategy: ExecuteStrategy.AUTO,
       params: getDefaultParams(type),
@@ -267,6 +279,40 @@ export default function WorkflowEditor() {
 
     setSelectedNode(newNodeId)
     message.success(`已添加 ${getTypeLabel(type)} 节点`)
+  }
+
+  const addNodeAsChild = (parentId: string, branch: 'true' | 'false', type: OperationType) => {
+    const newNodeId = `node_${Date.now()}`
+    const nodeIndex = config.nodes.length + 1
+    const newNode: WorkflowNode = {
+      id: newNodeId,
+      name: `${getTypeLabel(type)} #${nodeIndex}`,
+      type,
+      strategy: ExecuteStrategy.AUTO,
+      params: getDefaultParams(type),
+      nextNodeId: '',
+    }
+
+    const updatedNodes = [...config.nodes]
+    const parentIndex = updatedNodes.findIndex(n => n.id === parentId)
+    
+    if (parentIndex !== -1) {
+      updatedNodes.push(newNode)
+      
+      if (branch === 'true') {
+        updatedNodes[parentIndex].conditionTrueNodeId = newNodeId
+      } else {
+        updatedNodes[parentIndex].conditionFalseNodeId = newNodeId
+      }
+      
+      setConfig({
+        ...config,
+        nodes: updatedNodes,
+      })
+      
+      setSelectedNode(newNodeId)
+      message.success(`已添加 ${getTypeLabel(type)} 子节点到「${branch === 'true' ? '是' : '否'}」分支`)
+    }
   }
 
   const removeNode = (nodeId: string) => {
@@ -314,14 +360,23 @@ export default function WorkflowEditor() {
   }
 
   const updateNode = (nodeId: string, updates: Partial<WorkflowNode>) => {
+    console.log('[updateNode] 更新节点:', { nodeId, updates, currentStartNodeId: config.startNodeId })
     const updatedNodes = config.nodes.map(node =>
       node.id === nodeId ? { ...node, ...updates } : node
     )
 
-    setConfig({
+    const newConfig = {
       ...config,
       nodes: updatedNodes,
+    }
+    
+    console.log('[updateNode] 更新后的config:', { 
+      startNodeId: newConfig.startNodeId, 
+      nodesCount: newConfig.nodes.length,
+      firstNodeId: newConfig.nodes[0]?.id 
     })
+    
+    setConfig(newConfig)
   }
 
   const handleBack = () => {
@@ -377,7 +432,6 @@ export default function WorkflowEditor() {
 
     const params = new URLSearchParams()
     params.set('run', taskId)
-    params.set('workflowConfig', JSON.stringify(config))
     router.push(`/?${params.toString()}`)
   }
 
@@ -432,10 +486,9 @@ export default function WorkflowEditor() {
             icon={<SaveOutlined />}
             onClick={saveWorkflow}
             loading={isSaving}
-            type={hasUnsavedChanges ? 'primary' : 'default'}
-            style={hasUnsavedChanges ? {} : { borderColor: '#fff', color: '#fff' }}
+            type="primary"
           >
-            {hasUnsavedChanges ? '保存更改' : '保存'}
+            保存工作流
           </Button>
           <Button
             type="primary"
@@ -485,6 +538,7 @@ export default function WorkflowEditor() {
             selectedNode={selectedNode}
             onSelectNode={setSelectedNode}
             onAddNode={addNode}
+            onAddNodeAsChild={addNodeAsChild}
             onRemoveNode={removeNode}
             onUpdateNode={updateNode}
           />
@@ -511,6 +565,10 @@ export default function WorkflowEditor() {
               allNodes={config.nodes}
               onUpdate={(updates: Partial<WorkflowNode>) => updateNode(selectedNode, updates)}
               onSave={() => {
+                const currentNode = config.nodes.find(n => n.id === selectedNode)
+                console.log('[保存节点配置] 节点数据:', currentNode)
+                console.log('[保存节点配置] 所有节点:', config.nodes)
+                console.log('[保存节点配置] startNodeId:', config.startNodeId)
                 message.success('节点配置已保存')
               }}
               onClose={() => setSelectedNode(null)}
@@ -561,6 +619,10 @@ function getDefaultParams(type: OperationType): Record<string, any> {
       return { script: '' }
     case OperationType.NODE_SELECT:
       return { selector: '', storeAs: '' }
+    case OperationType.SCREENSHOT:
+      return { filename: '', screenshotType: 'fullpage' }
+    case OperationType.AI_TASK:
+      return { taskDescription: '', timeout: 60 }
     default:
       return {}
   }
@@ -576,6 +638,8 @@ function getTypeLabel(type: OperationType): string {
     [OperationType.NODE_SELECT]: '选择节点',
     [OperationType.SCRIPT_EXEC]: '执行脚本',
     [OperationType.HOVER]: '悬停元素',
+    [OperationType.SCREENSHOT]: '页面截取',
+    [OperationType.AI_TASK]: 'AI任务',
   }
   return labels[type] || type
 }

@@ -11,6 +11,8 @@ import {
   VerticalAlignBottomOutlined,
   CodeOutlined,
   DragOutlined,
+  CameraOutlined,
+  RobotOutlined,
 } from '@ant-design/icons'
 import { WorkflowConfig, WorkflowNode, OperationType, ExecuteStrategy } from '@/lib/workflow/types'
 
@@ -21,6 +23,7 @@ interface WorkflowCanvasProps {
   selectedNode: string | null
   onSelectNode: (nodeId: string) => void
   onAddNode: (type: OperationType, afterNodeId?: string) => void
+  onAddNodeAsChild: (parentId: string, branch: 'true' | 'false', type: OperationType) => void
   onRemoveNode: (nodeId: string) => void
   onUpdateNode: (nodeId: string, updates: Partial<WorkflowNode>) => void
 }
@@ -34,6 +37,8 @@ const NODE_TYPES = [
   { value: OperationType.HOVER, label: '悬停元素', icon: <AimOutlined />, color: '#eb2f96' },
   { value: OperationType.SCRIPT_EXEC, label: '执行脚本', icon: <CodeOutlined />, color: '#fa541c' },
   { value: OperationType.NODE_SELECT, label: '选择节点', icon: <DragOutlined />, color: '#2f54eb' },
+  { value: OperationType.SCREENSHOT, label: '页面截取', icon: <CameraOutlined />, color: '#8c8c8c' },
+  { value: OperationType.AI_TASK, label: 'AI任务', icon: <RobotOutlined />, color: '#13c2c2' },
 ]
 
 export default function WorkflowCanvas({
@@ -41,11 +46,18 @@ export default function WorkflowCanvas({
   selectedNode,
   onSelectNode,
   onAddNode,
+  onAddNodeAsChild,
   onRemoveNode,
 }: WorkflowCanvasProps) {
+  console.log('%c [ config ]-41', 'font-size:13px; background:pink; color:#bf2c9f;', config)
   const [hoveredNode, setHoveredNode] = useState<string | null>(null)
 
-  if (!config.startNodeId || config.nodes.length === 0) {
+  const effectiveConfig = {
+    ...config,
+    startNodeId: config.startNodeId || (config.nodes.length > 0 ? config.nodes[0].id : ''),
+  }
+
+  if (!effectiveConfig.startNodeId || effectiveConfig.nodes.length === 0) {
     return (
       <Empty
         description="暂无节点，请添加开始节点"
@@ -63,7 +75,7 @@ export default function WorkflowCanvas({
   }
 
   const getNodeById = (nodeId: string): WorkflowNode | undefined => {
-    return config.nodes.find(n => n.id === nodeId)
+    return effectiveConfig.nodes.find(n => n.id === nodeId)
   }
 
   const renderNode = (nodeId: string, depth: number = 0): React.ReactNode => {
@@ -84,6 +96,32 @@ export default function WorkflowCanvas({
             {renderNode(node.conditionTrueNodeId, depth + 1)}
           </div>
         )
+      } else {
+        nextNodes.push(
+          <div key={`${node.id}-true-add`} style={{ marginLeft: 40, marginTop: 8 }}>
+            <Tag color="success" style={{ marginBottom: 4 }}>✓ 是</Tag>
+            <Dropdown menu={{ items: NODE_TYPES.map(type => ({
+              key: type.value,
+              label: (
+                <Space>
+                  {type.icon}
+                  <span>{type.label}</span>
+                </Space>
+              ),
+              onClick: () => onAddNodeAsChild(node.id, 'true', type.value),
+            })) }} trigger={['click']}>
+              <Button
+                type="link"
+                size="small"
+                icon={<PlusOutlined />}
+                style={{ padding: '0 4px', height: 'auto' }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                添加子节点
+              </Button>
+            </Dropdown>
+          </div>
+        )
       }
       
       if (node.conditionFalseNodeId) {
@@ -91,6 +129,32 @@ export default function WorkflowCanvas({
           <div key={`${node.id}-false`} style={{ marginLeft: 40, marginTop: 8 }}>
             <Tag color="error" style={{ marginBottom: 4 }}>✗ 否</Tag>
             {renderNode(node.conditionFalseNodeId, depth + 1)}
+          </div>
+        )
+      } else {
+        nextNodes.push(
+          <div key={`${node.id}-false-add`} style={{ marginLeft: 40, marginTop: 8 }}>
+            <Tag color="error" style={{ marginBottom: 4 }}>✗ 否</Tag>
+            <Dropdown menu={{ items: NODE_TYPES.map(type => ({
+              key: type.value,
+              label: (
+                <Space>
+                  {type.icon}
+                  <span>{type.label}</span>
+                </Space>
+              ),
+              onClick: () => onAddNodeAsChild(node.id, 'false', type.value),
+            })) }} trigger={['click']}>
+              <Button
+                type="link"
+                size="small"
+                icon={<PlusOutlined />}
+                style={{ padding: '0 4px', height: 'auto' }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                添加子节点
+              </Button>
+            </Dropdown>
           </div>
         )
       }
@@ -142,9 +206,9 @@ export default function WorkflowCanvas({
               }}>
                 {typeInfo?.icon}
               </span>
-              <Text strong style={{ flex: 1 }}>{typeInfo?.label || node.type}</Text>
+              <Text strong style={{ flex: 1 }}>{node.name || typeInfo?.label || node.type}</Text>
               <Text type="secondary" style={{ fontSize: 12 }}>
-                #{config.nodes.indexOf(node) + 1}
+                #{effectiveConfig.nodes.indexOf(node) + 1}
               </Text>
             </Space>
 
@@ -167,17 +231,19 @@ export default function WorkflowCanvas({
               )}
             </Space>
 
-            <Dropdown menu={{ items: addMenuItems }} trigger={['click']}>
-              <Button
-                type="link"
-                size="small"
-                icon={<PlusOutlined />}
-                style={{ padding: '0 4px', height: 'auto' }}
-                onClick={(e) => e.stopPropagation()}
-              >
-                添加后续节点
-              </Button>
-            </Dropdown>
+            {node.type !== OperationType.CONDITION && (
+              <Dropdown menu={{ items: addMenuItems }} trigger={['click']}>
+                <Button
+                  type="link"
+                  size="small"
+                  icon={<PlusOutlined />}
+                  style={{ padding: '0 4px', height: 'auto' }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  添加后续节点
+                </Button>
+              </Dropdown>
+            )}
           </Space>
         </Card>
 
@@ -188,7 +254,7 @@ export default function WorkflowCanvas({
 
   return (
     <div style={{ padding: '16px 0' }}>
-      {renderNode(config.startNodeId)}
+      {renderNode(effectiveConfig.startNodeId)}
     </div>
   )
 }

@@ -106,7 +106,7 @@ export default function TaskCard({
           )}
           
           <Space size={4} wrap>
-            <Tag>{task.steps?.length || 0} 步骤</Tag>
+            <Tag>{(task as any).workflowConfig?.nodes?.length || task.steps?.length || 0} 步骤</Tag>
             {latestResult && (
               <Tag color={latestResult.status === 'success' ? 'success' : 'error'}>
                 {latestResult.status === 'success' ? '✓ 通过' : '✗ 失败'}
@@ -137,7 +137,7 @@ export default function TaskCard({
                   size="small"
                   icon={<PlayCircleOutlined />}
                   onClick={onRun}
-                  disabled={isDisabled || !task.steps || task.steps.length === 0}
+                  disabled={isDisabled || (!((task as any).workflowConfig?.nodes?.length > 0) && (!task.steps || task.steps.length === 0))}
                 />
               </Tooltip>
               <Tooltip title={isDisabled ? '其他任务正在执行' : '编辑任务'}>

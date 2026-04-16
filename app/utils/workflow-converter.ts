@@ -67,6 +67,21 @@ export function convertWorkflowConfigToSteps(workflowConfig: WorkflowConfig): an
           conditionFalseNodeId: node.conditionFalseNodeId,
         }
         break
+      case 'SCREENSHOT':
+        stepType = 'screenshot'
+        stepData = {
+          filename: node.params?.filename || `screenshot-${Date.now()}.png`,
+          screenshotType: node.params?.screenshotType || 'fullpage',
+          selector: node.params?.selector,
+        }
+        break
+      case 'AI_TASK':
+        stepType = 'ai_task'
+        stepData = {
+          taskDescription: node.params?.taskDescription || '',
+          timeout: node.params?.timeout || 60,
+        }
+        break
       default:
         stepType = 'script'
         stepData = { script: `// Unknown node type: ${node.type}` }

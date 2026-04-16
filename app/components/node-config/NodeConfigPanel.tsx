@@ -24,7 +24,7 @@ export default function NodeConfigPanel({
 }: NodeConfigPanelProps) {
   const [form] = Form.useForm()
 
-  const getNodeDisplayLabel = (n: WorkflowNode) => {
+  const getNodeDisplayLabel = (n: WorkflowNode, index?: number) => {
     const typeLabels: Record<OperationType, string> = {
       [OperationType.OPEN_PAGE]: '打开页面',
       [OperationType.CLICK]: '点击元素',
@@ -34,20 +34,42 @@ export default function NodeConfigPanel({
       [OperationType.HOVER]: '悬停元素',
       [OperationType.SCRIPT_EXEC]: '执行脚本',
       [OperationType.NODE_SELECT]: '选择节点',
+      [OperationType.SCREENSHOT]: '页面截取',
+      [OperationType.AI_TASK]: 'AI任务',
     }
     
+    const nodeIndex = index !== undefined ? index : allNodes.indexOf(n) + 1
+    const typeName = typeLabels[n.type] || n.type
     let desc = ''
+    
     if (n.type === OperationType.OPEN_PAGE && n.params.url) {
-      desc = n.params.url.length > 30 ? `${n.params.url.slice(0, 30)}...` : n.params.url
+      desc = n.params.url.length > 25 ? n.params.url.slice(0, 25) + '...' : n.params.url
+    } else if (n.type === OperationType.SCREENSHOT) {
+      desc = n.params.filename || '截图'
+    } else if (n.type === OperationType.AI_TASK && n.params.taskDescription) {
+      desc = n.params.taskDescription.length > 25 ? n.params.taskDescription.slice(0, 25) + '...' : n.params.taskDescription
     } else if (n.params.aiDescription) {
-      desc = n.params.aiDescription
+      desc = n.params.aiDescription.length > 25 ? n.params.aiDescription.slice(0, 25) + '...' : n.params.aiDescription
+    } else if (n.params.selector) {
+      desc = n.params.selector.length > 25 ? n.params.selector.slice(0, 25) + '...' : n.params.selector
     }
     
-    return `[${typeLabels[n.type] || n.type}] ${n.id}${desc ? ` - ${desc}` : ''}`
+    return `#${nodeIndex} ${n.name || typeName}${desc ? ` - ${desc}` : ''}`
   }
 
   const handleValuesChange = (changedValues: any) => {
     onUpdate(changedValues)
+  }
+
+  const handleSave = async () => {
+    try {
+      const values = await form.validateFields()
+      console.log('[NodeConfigPanel] 保存的数据:', values)
+      onUpdate(values)
+      onSave?.()
+    } catch (error) {
+      console.error('表单验证失败:', error)
+    }
   }
 
   const renderTypeSpecificParams = () => {
@@ -151,10 +173,13 @@ export default function NodeConfigPanel({
                 placeholder="选择节点（可后续添加）"
                 showSearch
                 optionFilterProp="label"
-                options={allNodes.filter(n => n.id !== node.id).map(n => ({
-                  value: n.id,
-                  label: getNodeDisplayLabel(n),
-                }))}
+                options={allNodes.filter(n => n.id !== node.id).map((n) => {
+                  const actualIndex = allNodes.indexOf(n) + 1
+                  return {
+                    value: n.id,
+                    label: getNodeDisplayLabel(n, actualIndex),
+                  }
+                })}
                 onChange={(value) => onUpdate({ conditionTrueNodeId: value || undefined })}
               />
             </Form.Item>
@@ -165,10 +190,13 @@ export default function NodeConfigPanel({
                 placeholder="选择节点（可后续添加）"
                 showSearch
                 optionFilterProp="label"
-                options={allNodes.filter(n => n.id !== node.id).map(n => ({
-                  value: n.id,
-                  label: getNodeDisplayLabel(n),
-                }))}
+                options={allNodes.filter(n => n.id !== node.id).map((n) => {
+                  const actualIndex = allNodes.indexOf(n) + 1
+                  return {
+                    value: n.id,
+                    label: getNodeDisplayLabel(n, actualIndex),
+                  }
+                })}
                 onChange={(value) => onUpdate({ conditionFalseNodeId: value || undefined })}
               />
             </Form.Item>
@@ -254,6 +282,75 @@ export default function NodeConfigPanel({
           </Space>
         )
 
+      case OperationType.SCREENSHOT:
+        return (
+          <Space direction="vertical" style={{ width: '100%' }}>
+            <Form.Item label="文件名（可选）" name={['params', 'filename']}>
+              <Input 
+                placeholder="screenshot-1.png"
+                onChange={(e) => onUpdate({ params: { ...node.params, filename: e.target.value } })}
+              />
+            </Form.Item>
+            
+            <Form.Item label="截图类型" name={['params', 'screenshotType']}>
+              <Select 
+                options={[
+                  { value: 'fullpage', label: '全页面截图' },
+                  { value: 'viewport', label: '视口截图' },
+                  { value: 'element', label: '元素截图' },
+                ]}
+                onChange={(value) => onUpdate({ params: { ...node.params, screenshotType: value } })}
+              />
+            </Form.Item>
+
+            {(node.params.screenshotType === 'element') && (
+              <Form.Item label="元素选择器" name={['params', 'selector']}>
+                <Input 
+                  placeholder="#element-id 或 //xpath"
+                  onChange={(e) => onUpdate({ params: { ...node.params, selector: e.target.value } })}
+                />
+              </Form.Item>
+            )}
+
+            <div style={{ padding: 12, background: '#f6f8fa', borderRadius: 4, fontSize: 12, color: '#666' }}>
+              📸 基于Playwright的截图功能，支持全页面、视口或指定元素截图
+            </div>
+          </Space>
+        )
+
+      case OperationType.AI_TASK:
+        return (
+          <Space direction="vertical" style={{ width: '100%' }}>
+            <Form.Item 
+              label="任务描述" 
+              name={['params', 'taskDescription']} 
+              rules={[{ required: true, message: '请输入AI任务描述' }]}
+            >
+              <TextArea 
+                rows={4}
+                placeholder="描述你希望AI执行的任务，例如：&#10;- 点击登录按钮并填写表单&#10;- 搜索商品并添加到购物车&#10;- 提交订单并确认"
+                onChange={(e) => onUpdate({ params: { ...node.params, taskDescription: e.target.value } })}
+              />
+            </Form.Item>
+            
+            <Form.Item label="超时时间(秒)" name={['params', 'timeout']}>
+              <InputNumber 
+                style={{ width: '100%' }}
+                min={10}
+                max={300}
+                defaultValue={60}
+                onChange={(value) => onUpdate({ params: { ...node.params, timeout: value || 60 } })}
+              />
+            </Form.Item>
+
+            <div style={{ padding: 12, background: '#f0f5ff', borderRadius: 4, fontSize: 12, color: '#666' }}>
+              🤖 AI将根据你的描述自动执行任务，无需配置选择器。基于Stagehand的act()方法实现。
+              <br/><br/>
+              执行结果：成功返回 ✅，失败返回 ❌
+            </div>
+          </Space>
+        )
+
       default:
         return null
     }
@@ -275,6 +372,13 @@ export default function NodeConfigPanel({
     >
       <Space direction="vertical" style={{ width: '100%' }} size="middle">
         <div>
+          <Text strong>节点信息:</Text>
+          <Paragraph copyable style={{ marginBottom: 0 }}>
+            <Text type="secondary">{node.name || node.id}</Text>
+          </Paragraph>
+        </div>
+
+        <div>
           <Text strong>节点 ID:</Text>
           <Paragraph copyable style={{ marginBottom: 0 }}>{node.id}</Paragraph>
         </div>
@@ -290,6 +394,8 @@ export default function NodeConfigPanel({
               { value: OperationType.NODE_SELECT, label: '选择节点' },
               { value: OperationType.SCRIPT_EXEC, label: '执行脚本' },
               { value: OperationType.HOVER, label: '悬停元素' },
+              { value: OperationType.SCREENSHOT, label: '页面截取' },
+              { value: OperationType.AI_TASK, label: 'AI任务' },
             ]}
             onChange={(value) => onUpdate({ type: value as OperationType })}
           />
@@ -312,10 +418,13 @@ export default function NodeConfigPanel({
             placeholder="选择下一个节点（留空则自动连接下一节点）"
             showSearch
             optionFilterProp="label"
-            options={allNodes.filter(n => n.id !== node.id).map(n => ({
-              value: n.id,
-              label: getNodeDisplayLabel(n),
-            }))}
+            options={allNodes.filter(n => n.id !== node.id).map((n, idx) => {
+              const actualIndex = allNodes.indexOf(n) + 1
+              return {
+                value: n.id,
+                label: getNodeDisplayLabel(n, actualIndex),
+              }
+            })}
             onChange={(value) => onUpdate({ nextNodeId: value || undefined })}
           />
         </Form.Item>
@@ -329,7 +438,7 @@ export default function NodeConfigPanel({
         <Button
           type="primary"
           icon={<SaveOutlined />}
-          onClick={() => onSave?.()}
+          onClick={handleSave}
           block
         >
           保存节点配置

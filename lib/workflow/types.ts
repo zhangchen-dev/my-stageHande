@@ -9,6 +9,8 @@ export enum OperationType {
   NODE_SELECT = 'NODE_SELECT',
   SCRIPT_EXEC = 'SCRIPT_EXEC',
   HOVER = 'HOVER',
+  SCREENSHOT = 'SCREENSHOT',
+  AI_TASK = 'AI_TASK',
 }
 
 export enum ExecuteStrategy {
@@ -19,6 +21,7 @@ export enum ExecuteStrategy {
 
 export interface WorkflowNode {
   id: string
+  name: string
   type: OperationType
   strategy: ExecuteStrategy
   params: Record<string, any>

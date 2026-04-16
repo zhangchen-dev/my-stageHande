@@ -28,6 +28,8 @@ import TaskCard from '@/app/components/task-card/TaskCard'
 import LogPanel from '@/app/components/log-panel/LogPanel'
 import ResultModal from '@/app/components/result-modal/ResultModal'
 import NewTaskModal from '@/app/components/new-task-modal/NewTaskModal'
+import LogManagement from '@/app/components/log-management/LogManagement'
+import { logStorage } from '@/lib/log-storage'
 
 const { Header, Content, Sider } = Layout
 const { Title } = Typography
@@ -41,7 +43,6 @@ export default function HomePage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const runTaskId = searchParams.get('run')
-  const workflowConfigStr = searchParams.get('workflowConfig')
 
   const {
     tasks,
@@ -69,6 +70,7 @@ export default function HomePage() {
   const [taskTemplates, setTaskTemplates] = useState<TestTask[]>([])
   const [abortController, setAbortController] = useState<AbortController | null>(null)
   const [isInitialized, setIsInitialized] = useState(false)
+  const [showLogManagement, setShowLogManagement] = useState(false)
 
   const taskRef = useRef<TestTask | null>(null)
   const isStartingRef = useRef(false)
@@ -76,32 +78,50 @@ export default function HomePage() {
   const initDoneRef = useRef(false)
 
   useEffect(() => {
-    if (initDoneRef.current && runTaskId && !runningTaskId && !isStartingRef.current) {
-      if (workflowConfigStr) {
-        try {
-          const workflowConfig = JSON.parse(workflowConfigStr)
-          const task = tasks.find(t => t.id === runTaskId)
-          if (task) {
-            const convertedTask = {
+    const runWorkflowTask = async () => {
+      if (!initDoneRef.current || !runTaskId || runningTaskId || isStartingRef.current) return
+
+      const task = tasks.find(t => t.id === runTaskId)
+      if (!task) {
+        message.error('未找到任务')
+        return
+      }
+
+      try {
+        let taskToRun = task
+
+        if (task.type === 'workflow' || task.workflowConfig) {
+          const db = await (window as any).indexedDB.open('StagehandTestDB', 2)
+          const result = await new Promise((resolve, reject) => {
+            db.onsuccess = () => {
+              const store = db.result.transaction('tasks', 'readonly').objectStore('tasks')
+              const request = store.get(runTaskId)
+              request.onsuccess = () => resolve(request.result)
+              request.onerror = () => reject(request.error)
+            }
+            db.onerror = () => reject(db.error)
+          })
+
+          const taskData = result as any
+          if (taskData?.workflowConfig) {
+            const workflowConfig = taskData.workflowConfig
+            taskToRun = {
               ...task,
               steps: convertWorkflowConfigToSteps(workflowConfig),
             }
-            taskRef.current = convertedTask
-            startTest(convertedTask)
           }
-        } catch (e) {
-          console.error('解析工作流配置失败:', e)
-          message.error('工作流配置格式错误')
         }
-      } else {
-        const task = tasks.find(t => t.id === runTaskId)
-        if (task) {
-          taskRef.current = task
-          startTest(task)
-        }
+
+        taskRef.current = taskToRun
+        startTest(taskToRun)
+      } catch (error) {
+        console.error('加载工作流配置失败:', error)
+        message.error('加载工作流配置失败')
       }
     }
-  }, [runTaskId, tasks, initDoneRef.current, workflowConfigStr])
+
+    runWorkflowTask()
+  }, [runTaskId, tasks, initDoneRef.current])
 
   useEffect(() => {
     const initApp = async () => {
@@ -215,8 +235,45 @@ export default function HomePage() {
     message.success('模板已删除')
   }, [loadTaskTemplates])
 
+  const saveExecutionLog = async (taskId: string, taskName: string, status: 'success' | 'error' | 'aborted', startTime: string) => {
+    try {
+      const executionLog = {
+        id: `log_${Date.now()}`,
+        taskId,
+        taskName,
+        startTime,
+        endTime: new Date().toISOString(),
+        duration: Date.now() - new Date(startTime).getTime(),
+        status,
+        logs: logs,
+        stepsCount: logs.filter(l => l.stepId).length,
+        successSteps: logs.filter(l => l.level === 'success').length,
+        failedSteps: logs.filter(l => l.level === 'error').length,
+        createdAt: new Date().toISOString(),
+      }
+      
+      await logStorage.saveLog(executionLog)
+      console.log('[日志] 执行日志已保存:', executionLog.id)
+    } catch (error) {
+      console.error('[日志] 保存执行日志失败:', error)
+    }
+  }
+
   const startTest = async (task: TestTask) => {
-    if (!task || task.steps.length === 0) {
+    // 对于workflow类型任务，直接使用workflowConfig
+    let taskToRun = task
+    if ((task.type === 'workflow' || task.workflowConfig)) {
+      const workflowConfig = (task as any).workflowConfig
+      if (workflowConfig?.nodes?.length > 0) {
+        console.log(`[startTest] 执行工作流任务: ${task.name}, 节点数: ${workflowConfig.nodes.length}`)
+        taskToRun = {
+          ...task,
+          steps: convertWorkflowConfigToSteps(workflowConfig),
+        }
+      }
+    }
+
+    if (!taskToRun || !taskToRun.steps || taskToRun.steps.length === 0) {
       message.warning('任务没有配置步骤，请先编辑任务添加步骤')
       return
     }
@@ -228,15 +285,16 @@ export default function HomePage() {
 
     isStartingRef.current = true
     isStoppedRef.current = false
-    setRunningTaskId(task.id)
-    taskRef.current = task
+    setRunningTaskId(taskToRun.id)
+    taskRef.current = taskToRun
     setLogs([])
     
+    const startTime = new Date().toISOString()
     const testId = `test_${Date.now()}`
     setCurrentTestId(testId)
 
     try {
-      await updateTask({ ...task, status: 'running' as const })
+      await updateTask({ ...taskToRun, status: 'running' as const })
     } catch (error) {
       message.error('更新任务状态失败')
       setRunningTaskId(null)
@@ -252,7 +310,7 @@ export default function HomePage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          steps: task.steps, 
+          steps: taskToRun.steps, 
           useHeadful, 
           strategy: defaultStrategy,
           testId
@@ -292,12 +350,12 @@ export default function HomePage() {
                 
                 const result: TestResult = {
                   id: `result_${Date.now()}`,
-                  taskId: task.id,
-                  taskName: task.name,
+                  taskId: taskToRun.id,
+                  taskName: taskToRun.name,
                   status: isSuccess ? 'success' : 'failed',
                   executedAt: new Date().toISOString(),
                   duration: (log.details?.totalDuration as number) || 0,
-                  totalSteps: task.steps.length,
+                  totalSteps: taskToRun.steps.length,
                   passedSteps,
                   failedSteps,
                   skippedSteps: 0,
@@ -312,7 +370,7 @@ export default function HomePage() {
                   finalStatus = 'failed'
                 }
                 
-                await updateTask({ ...task, status: finalStatus })
+                await updateTask({ ...taskToRun, status: finalStatus })
               }
             } catch (e) {
               console.error('解析日志失败:', e)
@@ -350,6 +408,18 @@ export default function HomePage() {
       }
     } finally {
       if (!isStoppedRef.current) {
+        const finalTask = taskRef.current
+        const isFailed = logs.some(l => l.level === 'error')
+        
+        if (finalTask) {
+          saveExecutionLog(
+            finalTask.id, 
+            finalTask.name, 
+            isFailed ? 'error' : 'success', 
+            startTime
+          ).catch(e => console.error('[日志] 保存失败:', e))
+        }
+        
         setRunningTaskId(null)
         setAbortController(null)
         setCurrentTestId(null)
@@ -420,6 +490,13 @@ export default function HomePage() {
       } catch (e) {
         console.error('[终止] 更新任务状态失败:', e)
       }
+      
+      saveExecutionLog(
+        currentTask.id,
+        currentTask.name,
+        'aborted',
+        new Date(Date.now() - 10000).toISOString()
+      ).catch(e => console.error('[日志] 保存失败:', e))
       
       setLogs(prev => [...prev, {
         timestamp: new Date().toISOString(),
@@ -537,6 +614,12 @@ export default function HomePage() {
           >
             刷新
           </Button>
+          <Button
+            icon={<FileTextOutlined />}
+            onClick={() => setShowLogManagement(true)}
+          >
+            日志管理
+          </Button>
         </Space>
       </Header>
 
@@ -641,6 +724,11 @@ export default function HomePage() {
         open={showResultModal}
         result={selectedResult}
         onClose={() => setShowResultModal(false)}
+      />
+      
+      <LogManagement
+        visible={showLogManagement}
+        onClose={() => setShowLogManagement(false)}
       />
     </Layout>
   )
