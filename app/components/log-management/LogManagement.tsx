@@ -186,8 +186,8 @@ export default function LogManagement({ visible, onClose }: LogManagementProps) 
       width={1200}
       styles={{ body: { padding: '24px' } }}
     >
-      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-        <Space wrap>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, width: '100%' }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <Input
             placeholder="搜索任务名称/ID/状态"
             prefix={<SearchOutlined />}
@@ -216,7 +216,7 @@ export default function LogManagement({ visible, onClose }: LogManagementProps) 
           >
             <Button danger>清除全部</Button>
           </Popconfirm>
-        </Space>
+        </div>
 
         <Card size="small">
           <Table
@@ -232,7 +232,7 @@ export default function LogManagement({ visible, onClose }: LogManagementProps) 
             locale={{ emptyText: <Empty description="暂无执行日志" /> }}
           />
         </Card>
-      </Space>
+      </div>
 
       <Modal
         title={`日志详情 - ${selectedLog?.taskName || ''}`}
@@ -242,9 +242,9 @@ export default function LogManagement({ visible, onClose }: LogManagementProps) 
         width={800}
       >
         {selectedLog && (
-          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, width: '100%' }}>
             <Card size="small" title="基本信息">
-              <Space direction="vertical" style={{ width: '100%' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
                 <div><Text strong>任务ID：</Text><Text copyable>{selectedLog.taskId}</Text></div>
                 <div><Text strong>状态：</Text>{getStatusTag(selectedLog.status)}</div>
                 <div><Text strong>开始时间：</Text>{dayjs(selectedLog.startTime).format('YYYY-MM-DD HH:mm:ss')}</div>
@@ -255,7 +255,7 @@ export default function LogManagement({ visible, onClose }: LogManagementProps) 
                   <div><Text strong>总耗时：</Text>{Math.round(selectedLog.duration / 1000)} 秒</div>
                 )}
                 <div><Text strong>步骤统计：</Text>{selectedLog.successSteps}/{selectedLog.stepsCount} 成功</div>
-              </Space>
+              </div>
             </Card>
 
             <Card size="small" title={`执行日志 (${selectedLog.logs.length})`}>
@@ -294,7 +294,7 @@ export default function LogManagement({ visible, onClose }: LogManagementProps) 
                 ))}
               </div>
             </Card>
-          </Space>
+          </div>
         )}
       </Modal>
     </Modal>

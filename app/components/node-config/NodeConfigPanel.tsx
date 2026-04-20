@@ -1,6 +1,6 @@
 'use client'
 
-import { Form, Input, Select, InputNumber, Button, Space, Card, Typography, Divider, Switch } from 'antd'
+import { Form, Input, Select, InputNumber, Button, Space, Card, Typography, Divider, Tag } from 'antd'
 import { WorkflowNode, OperationType, ExecuteStrategy } from '@/lib/workflow/types'
 import { DeleteOutlined, SaveOutlined } from '@ant-design/icons'
 
@@ -20,11 +20,15 @@ export default function NodeConfigPanel({
   allNodes,
   onUpdate,
   onSave,
-  onClose,
 }: NodeConfigPanelProps) {
   const [form] = Form.useForm()
 
-  const getNodeDisplayLabel = (n: WorkflowNode, index?: number) => {
+  // 使用基于实际节点列表的连续编号
+  const getNodeIndex = (nodeId: string): number => {
+    return allNodes.findIndex(n => n.id === nodeId) + 1
+  }
+
+  const getNodeDisplayLabel = (n: WorkflowNode): string => {
     const typeLabels: Record<OperationType, string> = {
       [OperationType.OPEN_PAGE]: '打开页面',
       [OperationType.CLICK]: '点击元素',
@@ -38,7 +42,7 @@ export default function NodeConfigPanel({
       [OperationType.AI_TASK]: 'AI任务',
     }
     
-    const nodeIndex = index !== undefined ? index : allNodes.indexOf(n) + 1
+    const nodeIndex = getNodeIndex(n.id)
     const typeName = typeLabels[n.type] || n.type
     let desc = ''
     
@@ -84,7 +88,7 @@ export default function NodeConfigPanel({
       case OperationType.CLICK:
       case OperationType.HOVER:
         return (
-          <Space direction="vertical" style={{ width: '100%' }} size="middle">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, width: '100%' }}>
             <Form.Item label="选择器 (CSS/XPath)" name={['params', 'selector']}>
               <Input 
                 placeholder="#element-id 或 //xpath" 
@@ -110,12 +114,12 @@ export default function NodeConfigPanel({
                 />
               </Form.Item>
             )}
-          </Space>
+          </div>
         )
 
       case OperationType.CONDITION:
         return (
-          <Space direction="vertical" style={{ width: '100%' }} size="middle">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, width: '100%' }}>
             <Form.Item label="条件类型" name={['params', 'checkType']}>
               <Select 
                 options={[
@@ -173,13 +177,10 @@ export default function NodeConfigPanel({
                 placeholder="选择节点（可后续添加）"
                 showSearch
                 optionFilterProp="label"
-                options={allNodes.filter(n => n.id !== node.id).map((n) => {
-                  const actualIndex = allNodes.indexOf(n) + 1
-                  return {
-                    value: n.id,
-                    label: getNodeDisplayLabel(n, actualIndex),
-                  }
-                })}
+                options={allNodes.filter(n => n.id !== node.id).map((n) => ({
+                  value: n.id,
+                  label: getNodeDisplayLabel(n),
+                }))}
                 onChange={(value) => onUpdate({ conditionTrueNodeId: value || undefined })}
               />
             </Form.Item>
@@ -190,17 +191,14 @@ export default function NodeConfigPanel({
                 placeholder="选择节点（可后续添加）"
                 showSearch
                 optionFilterProp="label"
-                options={allNodes.filter(n => n.id !== node.id).map((n) => {
-                  const actualIndex = allNodes.indexOf(n) + 1
-                  return {
-                    value: n.id,
-                    label: getNodeDisplayLabel(n, actualIndex),
-                  }
-                })}
+                options={allNodes.filter(n => n.id !== node.id).map((n) => ({
+                  value: n.id,
+                  label: getNodeDisplayLabel(n),
+                }))}
                 onChange={(value) => onUpdate({ conditionFalseNodeId: value || undefined })}
               />
             </Form.Item>
-          </Space>
+          </div>
         )
 
       case OperationType.FORM_FILL:
@@ -226,7 +224,7 @@ export default function NodeConfigPanel({
 
       case OperationType.SCROLL:
         return (
-          <Space direction="vertical" style={{ width: '100%' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, width: '100%' }}>
             <Form.Item label="滚动方向" name={['params', 'direction']}>
               <Select 
                 options={[
@@ -248,7 +246,7 @@ export default function NodeConfigPanel({
                 onChange={(value) => onUpdate({ params: { ...node.params, amount: value || 500 } })}
               />
             </Form.Item>
-          </Space>
+          </div>
         )
 
       case OperationType.SCRIPT_EXEC:
@@ -265,7 +263,7 @@ export default function NodeConfigPanel({
 
       case OperationType.NODE_SELECT:
         return (
-          <Space direction="vertical" style={{ width: '100%' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, width: '100%' }}>
             <Form.Item label="选择器" name={['params', 'selector']}>
               <Input 
                 placeholder="#element-id"
@@ -279,12 +277,12 @@ export default function NodeConfigPanel({
                 onChange={(e) => onUpdate({ params: { ...node.params, storeAs: e.target.value } })}
               />
             </Form.Item>
-          </Space>
+          </div>
         )
 
       case OperationType.SCREENSHOT:
         return (
-          <Space direction="vertical" style={{ width: '100%' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, width: '100%' }}>
             <Form.Item label="文件名（可选）" name={['params', 'filename']}>
               <Input 
                 placeholder="screenshot-1.png"
@@ -315,12 +313,12 @@ export default function NodeConfigPanel({
             <div style={{ padding: 12, background: '#f6f8fa', borderRadius: 4, fontSize: 12, color: '#666' }}>
               📸 基于Playwright的截图功能，支持全页面、视口或指定元素截图
             </div>
-          </Space>
+          </div>
         )
 
       case OperationType.AI_TASK:
         return (
-          <Space direction="vertical" style={{ width: '100%' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, width: '100%' }}>
             <Form.Item 
               label="任务描述" 
               name={['params', 'taskDescription']} 
@@ -348,13 +346,16 @@ export default function NodeConfigPanel({
               <br/><br/>
               执行结果：成功返回 ✅，失败返回 ❌
             </div>
-          </Space>
+          </div>
         )
 
       default:
         return null
     }
   }
+
+  const currentNodeIndex = getNodeIndex(node.id)
+  const nextSequentialNode = allNodes[currentNodeIndex]
 
   return (
     <Form
@@ -370,17 +371,15 @@ export default function NodeConfigPanel({
       }}
       onValuesChange={handleValuesChange}
     >
-      <Space direction="vertical" style={{ width: '100%' }} size="middle">
-        <div>
-          <Text strong>节点信息:</Text>
-          <Paragraph copyable style={{ marginBottom: 0 }}>
-            <Text type="secondary">{node.name || node.id}</Text>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, width: '100%' }}>
+        {/* 节点基本信息 - 精简版 */}
+        <div style={{ marginBottom: 8 }}>
+          <Text strong style={{ fontSize: 14 }}>
+            #{currentNodeIndex} {node.name || node.type}
+          </Text>
+          <Paragraph copyable={{ text: node.id }} style={{ marginBottom: 0, fontSize: 11, color: '#999' }}>
+            ID: {node.id.slice(0, 12)}...
           </Paragraph>
-        </div>
-
-        <div>
-          <Text strong>节点 ID:</Text>
-          <Paragraph copyable style={{ marginBottom: 0 }}>{node.id}</Paragraph>
         </div>
 
         <Form.Item label="操作类型" name="type">
@@ -412,22 +411,83 @@ export default function NodeConfigPanel({
           />
         </Form.Item>
 
-        <Form.Item label="下一个节点 →" name="nextNodeId">
+        <Form.Item 
+          label="下一个节点 →" 
+          name="nextNodeId"
+          tooltip={
+            <div>
+              <div>• 留空：自动连接到顺序上的下一个节点</div>
+              <div>• 选择：手动指定要跳转到的节点</div>
+              <div>• 支持创建循环和条件跳转</div>
+            </div>
+          }
+        >
           <Select 
             allowClear
-            placeholder="选择下一个节点（留空则自动连接下一节点）"
+            placeholder="留空则自动连接下一节点"
             showSearch
             optionFilterProp="label"
-            options={allNodes.filter(n => n.id !== node.id).map((n, idx) => {
-              const actualIndex = allNodes.indexOf(n) + 1
+            options={allNodes.filter(n => n.id !== node.id).map((n) => {
+              const targetIndex = getNodeIndex(n.id)
+              const isSequentialNext = targetIndex === currentNodeIndex + 1
+              
               return {
                 value: n.id,
-                label: getNodeDisplayLabel(n, actualIndex),
+                label: (
+                  <span>
+                    {getNodeDisplayLabel(n)}
+                    {isSequentialNext && (
+                      <Tag color="blue" style={{ marginLeft: 8, fontSize: 11 }}>
+                        顺序下一
+                      </Tag>
+                    )}
+                  </span>
+                ),
               }
             })}
-            onChange={(value) => onUpdate({ nextNodeId: value || undefined })}
+            onChange={(value) => {
+              console.log('[NodeConfig] 选择下一个节点:', { 
+                nodeId: node.id, 
+                selectedNextNodeId: value,
+                nodeName: node.name 
+              })
+              onUpdate({ nextNodeId: value || '' })
+            }}
+            onSelect={(value) => {
+              console.log('[NodeConfig] 确认选择:', value)
+              onUpdate({ nextNodeId: value as string })
+            }}
           />
         </Form.Item>
+
+        {/* 显示当前连接状态 - 精简版 */}
+        {!node.nextNodeId && currentNodeIndex < allNodes.length && (
+          <div style={{ 
+            padding: '8px 12px', 
+            background: '#f6f8fa', 
+            borderRadius: 4, 
+            fontSize: 11, 
+            color: '#666',
+          }}>
+            ℹ️ 自动连接到: #{currentNodeIndex + 1} {nextSequentialNode?.name}
+          </div>
+        )}
+
+        {node.nextNodeId && (() => {
+          const targetNode = allNodes.find(n => n.id === node.nextNodeId)
+          return targetNode ? (
+            <div style={{ 
+              padding: '8px 12px', 
+              background: '#e6f7ff', 
+              borderRadius: 4, 
+              fontSize: 11, 
+              color: '#1890ff',
+              border: '1px solid #91d5ff'
+            }}>
+              ✓ 已连接到: #{getNodeIndex(targetNode.id)} {targetNode.name}
+            </div>
+          ) : null
+        })()}
 
         <Divider plain>参数配置</Divider>
         
@@ -443,7 +503,7 @@ export default function NodeConfigPanel({
         >
           保存节点配置
         </Button>
-      </Space>
+      </div>
     </Form>
   )
 }

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { TestTask, TestResult, TestStep, ExecutionRecord } from '@/types'
+import { OperationType, ExecuteStrategy } from '@/lib/workflow/types'
 
 const DB_NAME = 'StagehandTestDB'
 const DB_VERSION = 2
@@ -271,41 +272,27 @@ export function useDatabase() {
   // 导入任务（从 JSON）
   const importTasks = useCallback(async (jsonData: string): Promise<TestTask[]> => {
     try {
-      const importedTasks: TestTask[] = JSON.parse(jsonData)
+      const importedData = JSON.parse(jsonData)
       
-      if (!Array.isArray(importedTasks)) {
-        // 单个任务
-        const task = importedTasks as TestTask
-        if (!task.id || !task.name || !Array.isArray(task.steps)) {
-          throw new Error('无效的任务数据格式')
-        }
-        
-        // 重新生成 ID 以避免冲突
-        const newTask: TestTask = {
-          ...task,
-          id: generateId(),
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        }
-        
-        const store = await transaction('tasks', 'readwrite')
-        return new Promise((resolve, reject) => {
-          const request = store.add(newTask)
-          request.onsuccess = () => {
-            setTasks(prev => [newTask, ...prev])
-            resolve([newTask])
-          }
-          request.onerror = () => reject(request.error)
-        })
+      if (!Array.isArray(importedData)) {
+        // 单个任务或工作流
+        return await importSingleTask(importedData)
       }
       
+      // 多个任务
       const now = new Date().toISOString()
-      const newTasks: TestTask[] = importedTasks.map(task => ({
-        ...task,
-        id: generateId(),
-        createdAt: now,
-        updatedAt: now,
-      }))
+      const newTasks: TestTask[] = []
+      
+      for (const task of importedData) {
+        const processedTask = await processImportedTask(task, now)
+        if (processedTask) {
+          newTasks.push(processedTask)
+        }
+      }
+      
+      if (newTasks.length === 0) {
+        throw new Error('没有有效的任务数据')
+      }
       
       const store = await transaction('tasks', 'readwrite')
       return new Promise((resolve, reject) => {
@@ -326,6 +313,184 @@ export function useDatabase() {
       throw new Error(`导入失败: ${(error as Error).message}`)
     }
   }, [])
+
+  // 处理单个导入的任务
+  const importSingleTask = async (task: any): Promise<TestTask[]> => {
+    const processedTask = await processImportedTask(task, new Date().toISOString())
+    if (!processedTask) {
+      throw new Error('无效的任务数据格式')
+    }
+    
+    const store = await transaction('tasks', 'readwrite')
+    return new Promise((resolve, reject) => {
+      const request = store.add(processedTask)
+      request.onsuccess = () => {
+        setTasks(prev => [processedTask!, ...prev])
+        resolve([processedTask!])
+      }
+      request.onerror = () => reject(request.error)
+    })
+  }
+
+  // 处理导入的任务数据（支持传统步骤和工作流配置）
+  const processImportedTask = async (task: any, timestamp: string): Promise<TestTask | null> => {
+    try {
+      // 验证基本字段
+      if (!task || typeof task !== 'object') {
+        console.warn('[导入] 无效的任务数据:', task)
+        return null
+      }
+
+      // 支持工作流类型任务
+      if (task.workflowConfig && task.workflowConfig.nodes && Array.isArray(task.workflowConfig.nodes)) {
+        console.log('[导入] 检测到工作流配置任务:', task.name)
+        
+        // 验证工作流配置的有效性
+        const workflowConfig = validateAndFixWorkflowConfig(task.workflowConfig)
+        
+        const newTask: TestTask = {
+          id: generateId(),
+          name: task.name || '未命名工作流',
+          type: 'workflow',
+          description: task.description,
+          workflowConfig: workflowConfig,
+          status: 'draft',
+          tags: task.tags,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        }
+        
+        console.log('[导入] 工作流任务处理完成:', { 
+          id: newTask.id, 
+          name: newTask.name, 
+          nodesCount: workflowConfig.nodes.length 
+        })
+        
+        return newTask
+      }
+      
+      // 支持传统步骤类型任务
+      if (Array.isArray(task.steps)) {
+        console.log('[导入] 检测到传统步骤任务:', task.name)
+        
+        const newTask: TestTask = {
+          ...task,
+          id: generateId(),
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        }
+        
+        // 确保必要字段存在
+        if (!newTask.status) newTask.status = 'draft'
+        
+        return newTask
+      }
+      
+      // 如果既没有 workflowConfig 也没有 steps，尝试转换
+      console.warn('[导入] 任务缺少必要数据，尝试修复:', task.name)
+      
+      if (task.name && (task.type === 'workflow' || !task.type)) {
+        // 尝试创建空的工作流任务
+        const startNodeId = `node_${Date.now()}_import`
+        const newTask: TestTask = {
+          id: generateId(),
+          name: task.name || '导入的任务',
+          type: 'workflow',
+          description: task.description || '从文件导入',
+          workflowConfig: {
+            startNodeId: startNodeId,
+            nodes: [{
+              id: startNodeId,
+              name: '开始节点',
+              type: OperationType.OPEN_PAGE,
+              strategy: ExecuteStrategy.AUTO,
+              params: { url: '' },
+              nextNodeId: '',
+            }],
+          },
+          status: 'draft',
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        }
+        
+        return newTask
+      }
+      
+      console.error('[导入] 无法识别的任务格式:', task)
+      return null
+      
+    } catch (error) {
+      console.error('[导入] 处理任务失败:', error, task)
+      return null
+    }
+  }
+
+  // 验证并修复工作流配置
+  const validateAndFixWorkflowConfig = (config: any): any => {
+    if (!config || !config.nodes || !Array.isArray(config.nodes)) {
+      // 返回默认的空工作流配置
+      const startNodeId = `node_${Date.now()}_fixed`
+      return {
+        startNodeId: startNodeId,
+        nodes: [{
+          id: startNodeId,
+          name: '开始节点',
+          type: OperationType.OPEN_PAGE,
+          strategy: ExecuteStrategy.AUTO,
+          params: { url: '' },
+          nextNodeId: '',
+        }],
+      }
+    }
+    
+    // 过滤掉无效节点，保留有效节点
+    const validNodes = config.nodes.filter((node: any) => 
+      node && node.id && node.type
+    ).map((node: any, index: number) => ({
+      ...node,
+      // 确保必要字段存在
+      id: node.id || `node_${Date.now()}_${index}`,
+      name: node.name || `节点 ${index + 1}`,
+      type: node.type || OperationType.SCRIPT_EXEC,
+      strategy: node.strategy || ExecuteStrategy.AUTO,
+      params: node.params || {},
+      // 清理无效引用
+      nextNodeId: node.nextNodeId || '',
+      conditionTrueNodeId: node.conditionTrueNodeId || undefined,
+      conditionFalseNodeId: node.conditionFalseNodeId || undefined,
+    }))
+    
+    // 确保 startNodeId 指向存在的节点
+    let startNodeId = config.startNodeId
+    if (!startNodeId || !validNodes.find((n: any) => n.id === startNodeId)) {
+      startNodeId = validNodes[0]?.id || ''
+    }
+    
+    // 清理无效的节点引用
+    const validNodeIds = new Set(validNodes.map((n: any) => n.id))
+    validNodes.forEach((node: any) => {
+      if (node.nextNodeId && !validNodeIds.has(node.nextNodeId)) {
+        node.nextNodeId = ''
+      }
+      if (node.conditionTrueNodeId && !validNodeIds.has(node.conditionTrueNodeId)) {
+        node.conditionTrueNodeId = undefined
+      }
+      if (node.conditionFalseNodeId && !validNodeIds.has(node.conditionFalseNodeId)) {
+        node.conditionFalseNodeId = undefined
+      }
+    })
+    
+    console.log('[验证] 工作流配置验证完成:', { 
+      originalNodes: config.nodes.length, 
+      validNodes: validNodes.length,
+      startNodeId 
+    })
+    
+    return {
+      startNodeId,
+      nodes: validNodes,
+    }
+  }
 
   // 导出任务为 JSON
   const exportTask = useCallback((task: TestTask): string => {

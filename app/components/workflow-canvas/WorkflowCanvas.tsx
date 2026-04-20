@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Button, Space, Select, Card, Tag, Typography, Empty, Dropdown } from 'antd'
+import { Button, Select, Card, Tag, Typography, Empty, Dropdown } from 'antd'
 import {
   PlusOutlined,
   CheckSquareOutlined,
@@ -47,17 +47,34 @@ export default function WorkflowCanvas({
   onSelectNode,
   onAddNode,
   onAddNodeAsChild,
-  onRemoveNode,
 }: WorkflowCanvasProps) {
-  console.log('%c [ config ]-41', 'font-size:13px; background:pink; color:#bf2c9f;', config)
   const [hoveredNode, setHoveredNode] = useState<string | null>(null)
 
-  const effectiveConfig = {
-    ...config,
-    startNodeId: config.startNodeId || (config.nodes.length > 0 ? config.nodes[0].id : ''),
+  // 获取有效的节点列表（清理无效引用）
+  const getValidatedConfig = (): { nodes: WorkflowNode[], startNodeId: string } => {
+    if (!config.nodes || config.nodes.length === 0) {
+      return { nodes: [], startNodeId: '' }
+    }
+
+    const validNodes = config.nodes.filter(node => node && node.id && node.type)
+    
+    let startNodeId = config.startNodeId
+    if (!startNodeId || !validNodes.find(n => n.id === startNodeId)) {
+      startNodeId = validNodes[0]?.id || ''
+    }
+
+    return { nodes: validNodes, startNodeId }
   }
 
-  if (!effectiveConfig.startNodeId || effectiveConfig.nodes.length === 0) {
+  const validatedConfig = getValidatedConfig()
+  const { nodes: validNodes, startNodeId: validStartNodeId } = validatedConfig
+
+  // 获取节点在列表中的索引（用于显示连续编号）
+  const getNodeIndex = (nodeId: string): number => {
+    return validNodes.findIndex(n => n.id === nodeId) + 1
+  }
+
+  if (!validStartNodeId || validNodes.length === 0) {
     return (
       <Empty
         description="暂无节点，请添加开始节点"
@@ -75,116 +92,170 @@ export default function WorkflowCanvas({
   }
 
   const getNodeById = (nodeId: string): WorkflowNode | undefined => {
-    return effectiveConfig.nodes.find(n => n.id === nodeId)
+    return validNodes.find(n => n.id === nodeId)
   }
 
+  // 检查节点是否被其他节点引用（避免重复渲染）
+  const renderedNodes = new Set<string>()
+
   const renderNode = (nodeId: string, depth: number = 0): React.ReactNode => {
+    // 防止无限循环和重复渲染
+    if (!nodeId || depth > 50 || renderedNodes.has(nodeId)) {
+      console.warn(`[Canvas] 跳过无效/重复/过深节点: ${nodeId}, depth: ${depth}`)
+      return null
+    }
+
     const node = getNodeById(nodeId)
-    if (!node || depth > 50) return null
+    if (!node) {
+      console.warn(`[Canvas] 未找到节点: ${nodeId}`)
+      return null
+    }
+
+    // 标记为已渲染
+    renderedNodes.add(nodeId)
 
     const isSelected = selectedNode === node.id
     const isHovered = hoveredNode === node.id
     const typeInfo = NODE_TYPES.find(t => t.value === node.type)
-    
+    const nodeIndex = getNodeIndex(node.id)
+
     let nextNodes: React.ReactNode[] = []
-    
+
     if (node.type === OperationType.CONDITION) {
-      if (node.conditionTrueNodeId) {
+      // 条件节点 - 渲染分支
+      if (node.conditionTrueNodeId && !renderedNodes.has(node.conditionTrueNodeId)) {
         nextNodes.push(
-          <div key={`${node.id}-true`} style={{ marginLeft: 40, marginTop: 8 }}>
-            <Tag color="success" style={{ marginBottom: 4 }}>✓ 是</Tag>
-            {renderNode(node.conditionTrueNodeId, depth + 1)}
+          <div key={`${node.id}-true`} style={{ marginLeft: 40, marginTop: 12 }}>
+            <div style={{
+              padding: '6px 12px',
+              background: '#f6ffed',
+              border: '1px solid #b7eb8f',
+              borderRadius: 4,
+              display: 'inline-block',
+              marginBottom: 8
+            }}>
+              <Tag color="success" style={{ margin: 0 }}>✓ 是</Tag>
+              <Text type="secondary" style={{ fontSize: 11, marginLeft: 8, color: '#52c41a' }}>
+                条件满足时执行
+              </Text>
+            </div>
+            {renderNode(node.conditionTrueNodeId!, depth + 1)}
           </div>
         )
-      } else {
+      } else if (!node.conditionTrueNodeId) {
         nextNodes.push(
           <div key={`${node.id}-true-add`} style={{ marginLeft: 40, marginTop: 8 }}>
-            <Tag color="success" style={{ marginBottom: 4 }}>✓ 是</Tag>
+            <Tag color="success">✓ 是</Tag>
             <Dropdown menu={{ items: NODE_TYPES.map(type => ({
               key: type.value,
               label: (
-                <Space>
+                <span>
                   {type.icon}
-                  <span>{type.label}</span>
-                </Space>
+                  <span style={{ marginLeft: 4 }}>{type.label}</span>
+                </span>
               ),
               onClick: () => onAddNodeAsChild(node.id, 'true', type.value),
             })) }} trigger={['click']}>
-              <Button
-                type="link"
-                size="small"
-                icon={<PlusOutlined />}
-                style={{ padding: '0 4px', height: 'auto' }}
-                onClick={(e) => e.stopPropagation()}
-              >
+              <Button type="link" size="small" icon={<PlusOutlined />} onClick={(e) => e.stopPropagation()}>
                 添加子节点
               </Button>
             </Dropdown>
           </div>
         )
       }
-      
-      if (node.conditionFalseNodeId) {
+
+      if (node.conditionFalseNodeId && !renderedNodes.has(node.conditionFalseNodeId)) {
         nextNodes.push(
-          <div key={`${node.id}-false`} style={{ marginLeft: 40, marginTop: 8 }}>
-            <Tag color="error" style={{ marginBottom: 4 }}>✗ 否</Tag>
-            {renderNode(node.conditionFalseNodeId, depth + 1)}
+          <div key={`${node.id}-false`} style={{ marginLeft: 40, marginTop: 12 }}>
+            <div style={{
+              padding: '6px 12px',
+              background: '#fff2f0',
+              border: '1px solid #ffccc7',
+              borderRadius: 4,
+              display: 'inline-block',
+              marginBottom: 8
+            }}>
+              <Tag color="error" style={{ margin: 0 }}>✗ 否</Tag>
+              <Text type="secondary" style={{ fontSize: 11, marginLeft: 8, color: '#ff4d4f' }}>
+                条件不满足时执行
+              </Text>
+            </div>
+            {renderNode(node.conditionFalseNodeId!, depth + 1)}
           </div>
         )
-      } else {
+      } else if (!node.conditionFalseNodeId) {
         nextNodes.push(
           <div key={`${node.id}-false-add`} style={{ marginLeft: 40, marginTop: 8 }}>
-            <Tag color="error" style={{ marginBottom: 4 }}>✗ 否</Tag>
+            <Tag color="error">✗ 否</Tag>
             <Dropdown menu={{ items: NODE_TYPES.map(type => ({
               key: type.value,
               label: (
-                <Space>
+                <span>
                   {type.icon}
-                  <span>{type.label}</span>
-                </Space>
+                  <span style={{ marginLeft: 4 }}>{type.label}</span>
+                </span>
               ),
               onClick: () => onAddNodeAsChild(node.id, 'false', type.value),
             })) }} trigger={['click']}>
-              <Button
-                type="link"
-                size="small"
-                icon={<PlusOutlined />}
-                style={{ padding: '0 4px', height: 'auto' }}
-                onClick={(e) => e.stopPropagation()}
-              >
+              <Button type="link" size="small" icon={<PlusOutlined />} onClick={(e) => e.stopPropagation()}>
                 添加子节点
               </Button>
             </Dropdown>
           </div>
         )
       }
-    } else if (node.nextNodeId) {
-      nextNodes.push(
-        <div key={`${node.id}-next`} style={{ marginTop: 8 }}>
-          <div style={{ 
-            width: 2, 
-            height: 20, 
-            background: '#d9d9d9', 
-            marginLeft: 120 
-          }} />
-          {renderNode(node.nextNodeId, depth + 1)}
-        </div>
-      )
+    } else {
+      // 非条件节点 - 渲染下一个节点
+      if (node.nextNodeId && !renderedNodes.has(node.nextNodeId)) {
+        nextNodes.push(
+          <div key={`${node.id}-next`} style={{ marginTop: 12 }}>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginLeft: 120,
+              marginBottom: 4
+            }}>
+              <div style={{
+                width: 2,
+                height: 20,
+                background: 'linear-gradient(180deg, #1890ff 0%, #69c0ff 100%)',
+                position: 'relative'
+              }}>
+                <div style={{
+                  position: 'absolute',
+                  bottom: -5,
+                  left: -4,
+                  width: 0,
+                  height: 0,
+                  borderLeft: '5px solid transparent',
+                  borderRight: '5px solid transparent',
+                  borderTop: '7px solid #1890ff'
+                }} />
+              </div>
+              <Text type="secondary" style={{ fontSize: 11, marginLeft: 12, color: '#1890ff' }}>
+                ↓ 下一步
+              </Text>
+            </div>
+            {renderNode(node.nextNodeId!, depth + 1)}
+          </div>
+        )
+      }
     }
 
     const addMenuItems = NODE_TYPES.map(type => ({
       key: type.value,
       label: (
-        <Space>
+        <span>
           {type.icon}
-          <span>{type.label}</span>
-        </Space>
+          <span style={{ marginLeft: 4 }}>{type.label}</span>
+        </span>
       ),
       onClick: () => onAddNode(type.value, node.id),
     }))
 
     return (
-      <div key={node.id}>
+      <div key={node.id} style={{ position: 'relative' }}>
         <Card
           size="small"
           hoverable
@@ -193,58 +264,79 @@ export default function WorkflowCanvas({
             borderWidth: 2,
             background: isSelected ? '#e6f7ff' : isHovered ? '#fff7e6' : undefined,
             maxWidth: 280,
+            cursor: 'pointer',
+            position: 'relative',
+            zIndex: 10,
           }}
-          onClick={() => onSelectNode(node.id)}
+          onClick={(e) => {
+            e.stopPropagation()
+            console.log('[Canvas] 点击节点:', node.id, node.name, `#${nodeIndex}`)
+            onSelectNode(node.id)
+          }}
           onMouseEnter={() => setHoveredNode(node.id)}
           onMouseLeave={() => setHoveredNode(null)}
         >
-          <Space direction="vertical" size={4} style={{ width: '100%' }}>
-            <Space>
-              <span style={{ 
-                fontSize: 18, 
-                color: typeInfo?.color || '#666',
-              }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }}>
+            {/* 节点标题 */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 18, color: typeInfo?.color || '#666' }}>
                 {typeInfo?.icon}
               </span>
-              <Text strong style={{ flex: 1 }}>{node.name || typeInfo?.label || node.type}</Text>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                #{effectiveConfig.nodes.indexOf(node) + 1}
+              <Text strong style={{ flex: 1, fontSize: 13 }}>
+                {node.name || typeInfo?.label || node.type}
               </Text>
-            </Space>
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                #{nodeIndex}
+              </Text>
+            </div>
 
-            <Text type="secondary" ellipsis style={{ fontSize: 12 }} title={getNodeDescription(node)}>
+            {/* 节点描述 */}
+            <Text 
+              type="secondary" 
+              ellipsis 
+              style={{ fontSize: 11 }} 
+              title={getNodeDescription(node)}
+            >
               {getNodeDescription(node)}
             </Text>
 
-            <Space size={4} wrap>
+            {/* 标签组 */}
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
               <Tag 
                 color={getStrategyColor(node.strategy)} 
-                style={{ fontSize: 11, margin: 0 }}
+                style={{ fontSize: 10, margin: 0 }}
               >
                 {node.strategy}
               </Tag>
-              
+
               {(node.type === OperationType.CONDITION && node.params.checkType) && (
-                <Tag color="orange" style={{ fontSize: 11, margin: 0 }}>
+                <Tag color="orange" style={{ fontSize: 10, margin: 0 }}>
                   {node.params.checkType}
                 </Tag>
               )}
-            </Space>
 
+              {(node.nextNodeId || node.conditionTrueNodeId || node.conditionFalseNodeId) && (
+                <Tag color="geekblue" style={{ fontSize: 10, margin: 0 }}>
+                  → 已连接
+                </Tag>
+              )}
+            </div>
+
+            {/* 添加按钮（非条件节点） */}
             {node.type !== OperationType.CONDITION && (
               <Dropdown menu={{ items: addMenuItems }} trigger={['click']}>
                 <Button
                   type="link"
                   size="small"
                   icon={<PlusOutlined />}
-                  style={{ padding: '0 4px', height: 'auto' }}
+                  style={{ padding: '0 4px', height: 'auto', fontSize: 11 }}
                   onClick={(e) => e.stopPropagation()}
                 >
                   添加后续节点
                 </Button>
               </Dropdown>
             )}
-          </Space>
+          </div>
         </Card>
 
         {nextNodes}
@@ -254,7 +346,68 @@ export default function WorkflowCanvas({
 
   return (
     <div style={{ padding: '16px 0' }}>
-      {renderNode(effectiveConfig.startNodeId)}
+      <div style={{ marginBottom: 16, padding: '8px 12px', background: '#f0f5ff', borderRadius: 4, fontSize: 12, color: '#666' }}>
+        📊 共 {validNodes.length} 个节点 | 点击节点可编辑配置
+      </div>
+      
+      {renderNode(validStartNodeId)}
+
+      {/* 显示未连接到主流程的孤立节点 */}
+      {(() => {
+        const connectedNodes = new Set<string>()
+        const collectConnected = (nodeId: string) => {
+          if (connectedNodes.has(nodeId)) return
+          const node = getNodeById(nodeId)
+          if (!node) return
+          
+          connectedNodes.add(nodeId)
+          if (node.nextNodeId) collectConnected(node.nextNodeId)
+          if (node.conditionTrueNodeId) collectConnected(node.conditionTrueNodeId)
+          if (node.conditionFalseNodeId) collectConnected(node.conditionFalseNodeId)
+        }
+        
+        collectConnected(validStartNodeId)
+        
+        const isolatedNodes = validNodes.filter(n => !connectedNodes.has(n.id))
+        
+        if (isolatedNodes.length > 0) {
+          return (
+            <div style={{ marginTop: 24, paddingTop: 16, borderTop: '2px dashed #ffd591' }}>
+              <Text type="warning" style={{ fontSize: 12, display: 'block', marginBottom: 12 }}>
+                ⚠️ 发现 {isolatedNodes.length} 个未连接的孤立节点：
+              </Text>
+              {isolatedNodes.map((node, idx) => {
+                const isolatedIndex = getNodeIndex(node.id)
+                return (
+                  <Card
+                    key={node.id}
+                    size="small"
+                    style={{
+                      maxWidth: 280,
+                      marginBottom: 8,
+                      borderColor: '#ffd591',
+                      background: '#fffbe6'
+                    }}
+                    onClick={() => onSelectNode(node.id)}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <Text strong style={{ flex: 1, fontSize: 12 }}>
+                        #{isolatedIndex} {node.name || node.type}
+                      </Text>
+                      <Tag color="warning" style={{ fontSize: 10, margin: 0 }}>孤立</Tag>
+                    </div>
+                    <Text type="secondary" ellipsis style={{ fontSize: 11 }}>
+                      {getNodeDescription(node)}
+                    </Text>
+                  </Card>
+                )
+              })}
+            </div>
+          )
+        }
+        
+        return null
+      })()}
     </div>
   )
 }

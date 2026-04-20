@@ -190,11 +190,17 @@ export default function WorkflowEditor() {
     try {
       const workflowId = taskId || `workflow_${Date.now()}`
       
+      // 在保存前自动连接未指定 nextNodeId 的节点
+      const connectedNodes = autoConnectNodes(config.nodes)
+      
       const taskData = {
         id: workflowId,
         name: taskName,
         type: 'workflow',
-        workflowConfig: config,
+        workflowConfig: {
+          ...config,
+          nodes: connectedNodes,
+        },
         status: 'draft',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -203,7 +209,8 @@ export default function WorkflowEditor() {
       console.log('[saveWorkflow] 保存工作流:', { 
         id: workflowId, 
         name: taskName, 
-        nodesCount: config.nodes.length,
+        nodesCount: connectedNodes.length,
+        autoConnectedNodes: connectedNodes.filter(n => n.nextNodeId).length
       })
 
       const db = await openDB()
@@ -211,12 +218,20 @@ export default function WorkflowEditor() {
       const request = store.put(taskData)
 
       request.onsuccess = () => {
-        setOriginalConfig({ ...config })
+        // 更新本地状态为已连接的配置
+        setConfig({
+          ...config,
+          nodes: connectedNodes,
+        })
+        setOriginalConfig({
+          ...config,
+          nodes: connectedNodes,
+        })
         setHasUnsavedChanges(false)
         setIsSaved(true)
         
         message.success({
-          content: `✓ 工作流已保存 (${config.nodes.length} 节点)`,
+          content: `✓ 工作流已保存 (${connectedNodes.length} 节点, ${connectedNodes.filter(n => n.nextNodeId).length} 个连接)`,
           icon: <CheckCircleOutlined style={{ color: '#52c41a' }} />,
         })
 
@@ -361,9 +376,35 @@ export default function WorkflowEditor() {
 
   const updateNode = (nodeId: string, updates: Partial<WorkflowNode>) => {
     console.log('[updateNode] 更新节点:', { nodeId, updates, currentStartNodeId: config.startNodeId })
+    
     const updatedNodes = config.nodes.map(node =>
       node.id === nodeId ? { ...node, ...updates } : node
     )
+
+    // 如果更新了 nextNodeId，验证并清理无效引用
+    if (updates.nextNodeId !== undefined || updates.conditionTrueNodeId !== undefined || updates.conditionFalseNodeId !== undefined) {
+      const validNodeIds = new Set(updatedNodes.map(n => n.id))
+      
+      updatedNodes.forEach(node => {
+        // 验证 nextNodeId
+        if (node.nextNodeId && !validNodeIds.has(node.nextNodeId)) {
+          console.warn(`[updateNode] 节点 ${node.id} 的 nextNodeId (${node.nextNodeId}) 无效，已清除`)
+          node.nextNodeId = ''
+        }
+        
+        // 验证 conditionTrueNodeId
+        if (node.conditionTrueNodeId && !validNodeIds.has(node.conditionTrueNodeId)) {
+          console.warn(`[updateNode] 节点 ${node.id} 的 conditionTrueNodeId 无效，已清除`)
+          node.conditionTrueNodeId = undefined
+        }
+        
+        // 验证 conditionFalseNodeId
+        if (node.conditionFalseNodeId && !validNodeIds.has(node.conditionFalseNodeId)) {
+          console.warn(`[updateNode] 节点 ${node.id} 的 conditionFalseNodeId 无效，已清除`)
+          node.conditionFalseNodeId = undefined
+        }
+      })
+    }
 
     const newConfig = {
       ...config,
@@ -373,10 +414,39 @@ export default function WorkflowEditor() {
     console.log('[updateNode] 更新后的config:', { 
       startNodeId: newConfig.startNodeId, 
       nodesCount: newConfig.nodes.length,
-      firstNodeId: newConfig.nodes[0]?.id 
+      firstNodeId: newConfig.nodes[0]?.id,
+      updatedNodeId: nodeId,
+      updatedNextNodeId: updates.nextNodeId 
     })
     
     setConfig(newConfig)
+  }
+
+  // 自动连接节点（当 nextNodeId 为空时按顺序连接）
+  const autoConnectNodes = (nodes: WorkflowNode[]): WorkflowNode[] => {
+    const connectedNodes = nodes.map((node, index) => {
+      const updatedNode = { ...node }
+      
+      // 如果没有手动指定 nextNodeId 且不是最后一个节点，则自动连接到顺序上的下一个节点
+      if (!updatedNode.nextNodeId && index < nodes.length - 1 && updatedNode.type !== OperationType.CONDITION) {
+        updatedNode.nextNodeId = nodes[index + 1].id
+      }
+      
+      return updatedNode
+    })
+    
+    console.log('[autoConnectNodes] 自动连接完成:', {
+      totalNodes: connectedNodes.length,
+      connections: connectedNodes.filter(n => n.nextNodeId).length
+    })
+    
+    return connectedNodes
+  }
+
+  // 获取有效节点数量（过滤无效数据）
+  const getValidNodesCount = (): number => {
+    if (!config.nodes || config.nodes.length === 0) return 0
+    return config.nodes.filter(node => node && node.id && node.type).length
   }
 
   const handleBack = () => {
@@ -515,9 +585,7 @@ export default function WorkflowEditor() {
       <Content style={{ padding: '24px', background: '#f5f5f5', display: 'flex', gap: '16px', height: 'calc(100vh - 120px)' }}>
         <Card
           title={
-            <Space>
-              <span>工作流节点 ({config.nodes.length})</span>
-            </Space>
+            <span>工作流节点 ({getValidNodesCount()})</span>
           }
           style={{ flex: 2, overflow: 'auto' }}
           extra={
