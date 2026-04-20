@@ -43,6 +43,7 @@ export default function HomePage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const runTaskId = searchParams.get('run')
+  const workflowConfigStr = searchParams.get('workflowConfig')
 
   const {
     tasks,
@@ -82,7 +83,7 @@ export default function HomePage() {
       if (!initDoneRef.current || !runTaskId || runningTaskId || isStartingRef.current) return
 
       const task = tasks.find(t => t.id === runTaskId)
-      if (!task) {
+      if (!task && !workflowConfigStr) {
         message.error('未找到任务')
         return
       }
@@ -90,7 +91,29 @@ export default function HomePage() {
       try {
         let taskToRun = task
 
-        if (task.type === 'workflow' || task.workflowConfig) {
+        if (workflowConfigStr) {
+          try {
+            console.log('[执行] 使用URL传递的工作流配置')
+            const workflowConfig = JSON.parse(workflowConfigStr)
+            
+            taskToRun = {
+              id: runTaskId,
+              name: task?.name || '工作流任务',
+              description: `工作流执行 - ${new Date().toLocaleString()}`,
+              steps: convertWorkflowConfigToSteps(workflowConfig),
+              status: 'running' as any,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+              type: 'workflow' as any,
+              workflowConfig,
+            } as any;
+          } catch (parseError) {
+            console.error('[执行] 解析URL配置失败:', parseError)
+            message.error('工作流配置格式错误')
+            return
+          }
+        } else if (task && ((task as any).type === 'workflow' || (task as any).workflowConfig)) {
+          console.log('[执行] 从数据库读取工作流配置')
           const db = await (window as any).indexedDB.open('StagehandTestDB', 2)
           const result = await new Promise((resolve, reject) => {
             db.onsuccess = () => {
@@ -112,6 +135,13 @@ export default function HomePage() {
           }
         }
 
+        if (!taskToRun || !taskToRun.steps || taskToRun.steps.length === 0) {
+          message.warning('任务没有配置步骤，请先编辑任务添加步骤')
+          return
+        }
+
+        console.log(`[执行] 开始执行任务: ${taskToRun.name}, 步骤数: ${taskToRun.steps.length}`)
+        
         taskRef.current = taskToRun
         startTest(taskToRun)
       } catch (error) {
@@ -121,7 +151,7 @@ export default function HomePage() {
     }
 
     runWorkflowTask()
-  }, [runTaskId, tasks, initDoneRef.current])
+  }, [runTaskId, tasks, initDoneRef.current, workflowConfigStr])
 
   useEffect(() => {
     const initApp = async () => {
@@ -207,6 +237,193 @@ export default function HomePage() {
     }
   }, [importTasks])
 
+  const handleImportJsonTask = useCallback(async () => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.json'
+    input.multiple = false
+
+    input.onchange = async (e: Event) => {
+      const file = (e.target as HTMLInputElement).files?.[0]
+      if (!file) return
+
+      try {
+        const text = await file.text()
+        console.log('[导入] 原始文件内容长度:', text.length)
+        console.log('[导入] 文件名:', file.name)
+
+        const data = JSON.parse(text)
+        console.log('[导入] 解析后的数据类型:', typeof data)
+        console.log('[导入] 是否为数组:', Array.isArray(data))
+
+        let tasksToImport: Array<{
+          name: string
+          description?: string
+          steps: TestStep[]
+          workflowConfig?: any
+        }> = []
+
+        if (Array.isArray(data)) {
+          console.log('[导入] 检测到数组格式，元素数量:', data.length)
+
+          if (data.length === 0) {
+            message.warning('文件内容为空')
+            return
+          }
+
+          const firstItem = data[0]
+          console.log('[导入] 第一个元素结构:', Object.keys(firstItem))
+
+          // 判断是任务数组还是步骤数组
+          const isTaskArray = firstItem && (
+            (firstItem as any).name ||
+            (firstItem as any).workflowConfig ||
+            ((firstItem as any).steps && Array.isArray((firstItem as any).steps))
+          )
+
+          const isStepArray = firstItem &&
+            (firstItem as TestStep).id &&
+            (firstItem as TestStep).type &&
+            (firstItem as TestStep).description &&
+            !(firstItem as any).name
+
+          console.log('[导入] isTaskArray:', isTaskArray)
+          console.log('[导入] isStepArray:', isStepArray)
+
+          if (isTaskArray) {
+            console.log('[导入] ✅ 检测到任务数组格式，将导入所有任务')
+
+            for (const task of data) {
+              let steps: TestStep[] = []
+
+              if ((task as any).workflowConfig) {
+                console.log(`[导入] 发现工作流任务: ${(task as any).name}`)
+                try {
+                  steps = convertWorkflowConfigToSteps((task as any).workflowConfig)
+                  console.log(`[导入] 工作流转换成功，步骤数: ${steps.length}`)
+                } catch (convertError) {
+                  console.error('[导入] 工作流转换失败:', convertError)
+                  steps = (task as any).steps || []
+                }
+              } else if ((task as any).steps && Array.isArray((task as any).steps)) {
+                steps = (task as any).steps
+              }
+
+              tasksToImport.push({
+                name: (task as any).name || '未命名任务',
+                description: (task as any).description,
+                steps,
+                workflowConfig: (task as any).workflowConfig,
+              })
+            }
+          } else if (isStepArray) {
+            console.log('[导入] ✅ 检测到步骤数组格式，将创建单个任务')
+            tasksToImport.push({
+              name: file.name.replace('.json', ''),
+              description: `从 ${file.name} 导入`,
+              steps: data as TestStep[],
+            })
+          } else {
+            console.error('[导入] ❌ 无法识别的数组格式')
+            message.error('JSON 格式不正确：无法识别数据结构')
+            return
+          }
+        } else if (data.steps && Array.isArray(data.steps)) {
+          console.log('[导入] ✅ 检测到单个任务对象格式')
+          tasksToImport.push({
+            name: data.name || file.name.replace('.json', ''),
+            description: data.description,
+            steps: data.steps,
+            workflowConfig: data.workflowConfig,
+          })
+        } else {
+          console.error('[导入] ❌ 无法识别的JSON格式')
+          message.error('JSON 格式不正确：支持任务数组、步骤数组或单个任务对象')
+          return
+        }
+
+        console.log('[导入] 准备导入任务数:', tasksToImport.length)
+        console.log('[导入] 任务详情:')
+        tasksToImport.forEach((task, index) => {
+          console.log(`  [${index + 1}] ${task.name} - ${task.steps.length}个步骤`)
+          if (task.workflowConfig) {
+            console.log(`       [工作流模式] 节点数: ${task.workflowConfig.nodes?.length || 0}`)
+          }
+        })
+
+        if (tasksToImport.length === 0) {
+          message.warning('没有找到可导入的任务或步骤')
+          return
+        }
+
+        const importedTasks: TestTask[] = []
+
+        for (const taskData of tasksToImport) {
+          console.log(`[导入] 正在创建任务: ${taskData.name} (${taskData.steps.length}个步骤)`)
+
+          const newTask = await createTask(
+            taskData.name,
+            taskData.description,
+            taskData.steps,
+            ['导入', 'JSON', ...(taskData.workflowConfig ? ['工作流'] : [])]
+          )
+
+          if (newTask) {
+            console.log(`[导入] ✅ 任务创建成功: ${newTask.id}`)
+
+            if (taskData.workflowConfig) {
+              try {
+                const updatedTask = { ...newTask, workflowConfig: taskData.workflowConfig, type: 'workflow' }
+                await updateTask(updatedTask)
+                console.log('[导入] ✅ 工作流配置已保存')
+                importedTasks.push(updatedTask)
+              } catch (saveError) {
+                console.warn('[导入] 保存工作流配置失败，使用基本任务', saveError)
+                importedTasks.push(newTask)
+              }
+            } else {
+              importedTasks.push(newTask)
+            }
+          }
+        }
+
+        if (importedTasks.length > 0) {
+          const totalSteps = importedTasks.reduce((sum, t) => sum + (t.steps?.length || 0), 0)
+          message.success(`✅ 成功导入 ${importedTasks.length} 个任务，共 ${totalSteps} 个步骤`)
+
+          if (importedTasks.length === 1) {
+            Modal.confirm({
+              title: '导入成功',
+              content: `已成功导入 "${importedTasks[0].name}" 任务（${importedTasks[0].steps?.length || 0}个步骤）。是否立即执行？`,
+              okText: '立即执行',
+              cancelText: '稍后执行',
+              onOk: () => {
+                console.log('[导入] 用户选择立即执行')
+                setTimeout(() => startTest(importedTasks[0]), 500)
+              },
+            })
+          } else {
+            Modal.confirm({
+              title: '批量导入成功',
+              content: `已成功导入 ${importedTasks.length} 个任务。是否执行第一个任务 "${importedTasks[0].name}"？`,
+              okText: '执行第一个',
+              cancelText: '稍后手动执行',
+              onOk: () => {
+                setTimeout(() => startTest(importedTasks[0]), 500)
+              },
+            })
+          }
+        }
+      } catch (error) {
+        console.error('[导入] 解析失败:', error)
+        console.error('[导入] 错误堆栈:', (error as Error)?.stack)
+        message.error(`导入失败: ${(error as Error).message}`)
+      }
+    }
+
+    input.click()
+  }, [createTask, updateTask])
+
   const saveTaskAsTemplate = useCallback((task: TestTask) => {
     try {
       const template = {
@@ -260,9 +477,8 @@ export default function HomePage() {
   }
 
   const startTest = async (task: TestTask) => {
-    // 对于workflow类型任务，直接使用workflowConfig
     let taskToRun = task
-    if ((task.type === 'workflow' || task.workflowConfig)) {
+    if (((task as any).type === 'workflow' || (task as any).workflowConfig)) {
       const workflowConfig = (task as any).workflowConfig
       if (workflowConfig?.nodes?.length > 0) {
         console.log(`[startTest] 执行工作流任务: ${task.name}, 节点数: ${workflowConfig.nodes.length}`)
@@ -592,6 +808,13 @@ export default function HomePage() {
             disabled={!!runningTaskId}
           >
             新建任务
+          </Button>
+          <Button
+            icon={<ImportOutlined />}
+            onClick={handleImportJsonTask}
+            disabled={!!runningTaskId}
+          >
+            导入JSON
           </Button>
           <Button
             icon={<ImportOutlined />}

@@ -24,11 +24,13 @@ export function convertWorkflowConfigToSteps(workflowConfig: WorkflowConfig): an
     
     let stepType = 'script'
     let stepData: any = {}
+    let description = ''
     
     switch (node.type) {
       case 'OPEN_PAGE':
         stepType = 'goto'
-        stepData = { url: node.params?.url || '' }
+        stepData = { value: node.params?.url || '' }
+        description = `打开页面 ${node.params?.url || '（未指定URL）'}`
         break
       case 'CLICK':
         stepType = 'click'
@@ -36,14 +38,17 @@ export function convertWorkflowConfigToSteps(workflowConfig: WorkflowConfig): an
           selector: node.params?.selector ? { css: node.params.selector } : undefined,
           description: node.params?.aiDescription || undefined,
         }
+        description = `点击元素${node.params?.aiDescription ? `: ${node.params.aiDescription}` : ''}${node.params?.selector ? ` (${node.params.selector})` : ''}`
         break
       case 'FORM_FILL':
         stepType = 'fill'
         stepData = { fields: node.params?.fields || [] }
+        description = `填写表单 (${node.params?.fields?.length || 0} 个字段)`
         break
       case 'SCROLL':
         stepType = 'scroll'
         stepData = { direction: node.params?.direction || 'down', amount: node.params?.amount || 500 }
+        description = `滚动页面 (${node.params?.direction || 'down'} ${node.params?.amount || 500}px)`
         break
       case 'HOVER':
         stepType = 'hover'
@@ -51,10 +56,12 @@ export function convertWorkflowConfigToSteps(workflowConfig: WorkflowConfig): an
           selector: node.params?.selector ? { css: node.params.selector } : undefined,
           description: node.params?.aiDescription || undefined,
         }
+        description = `悬停元素${node.params?.aiDescription ? `: ${node.params.aiDescription}` : ''}${node.params?.selector ? ` (${node.params.selector})` : ''}`
         break
       case 'SCRIPT_EXEC':
         stepType = 'script'
         stepData = { script: node.params?.script || '' }
+        description = `执行脚本`
         break
       case 'CONDITION':
         stepType = 'condition'
@@ -66,6 +73,7 @@ export function convertWorkflowConfigToSteps(workflowConfig: WorkflowConfig): an
           conditionTrueNodeId: node.conditionTrueNodeId,
           conditionFalseNodeId: node.conditionFalseNodeId,
         }
+        description = `条件判断: ${node.params?.checkType || '未知条件'}`
         break
       case 'SCREENSHOT':
         stepType = 'screenshot'
@@ -74,6 +82,7 @@ export function convertWorkflowConfigToSteps(workflowConfig: WorkflowConfig): an
           screenshotType: node.params?.screenshotType || 'fullpage',
           selector: node.params?.selector,
         }
+        description = `页面截取`
         break
       case 'AI_TASK':
         stepType = 'ai_task'
@@ -81,16 +90,20 @@ export function convertWorkflowConfigToSteps(workflowConfig: WorkflowConfig): an
           taskDescription: node.params?.taskDescription || '',
           timeout: node.params?.timeout || 60,
         }
+        description = `AI任务: ${node.params?.taskDescription || '未指定任务'}`
         break
       default:
         stepType = 'script'
         stepData = { script: `// Unknown node type: ${node.type}` }
+        description = `未知类型: ${node.type}`
     }
     
     steps.push({
+      id: node.id,  // 添加节点ID用于追踪
       type: stepType,
       ...stepData,
       strategy: node.strategy?.toLowerCase() || 'auto',
+      description,  // ✅ 添加描述信息
     })
     
     if (node.type === 'CONDITION') {

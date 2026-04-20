@@ -170,11 +170,18 @@ export function useDatabase() {
 
   // 创建任务
   const createTask = useCallback(async (
-    name: string, 
+    name: string,
     description?: string,
     steps?: TestStep[],
     tags?: string[]
   ): Promise<TestTask> => {
+    console.log('[createTask] 开始创建任务')
+    console.log('[createTask] 参数 - name:', name)
+    console.log('[createTask] 参数 - description:', description)
+    console.log('[createTask] 参数 - steps 数量:', steps?.length)
+    console.log('[createTask] 参数 - steps 列表:', steps?.map(s => `${s.id}: ${s.type}`))
+    console.log('[createTask] 参数 - tags:', tags)
+
     const now = new Date().toISOString()
     const task: TestTask = {
       id: generateId(),
@@ -186,15 +193,23 @@ export function useDatabase() {
       updatedAt: now,
       tags,
     }
-    
+
+    console.log('[createTask] 创建的任务对象:', task)
+    console.log('[createTask] 任务步骤数:', task.steps.length)
+
     const store = await transaction('tasks', 'readwrite')
     return new Promise((resolve, reject) => {
       const request = store.add(task)
       request.onsuccess = () => {
+        console.log('[createTask] ✅ 任务已保存到 IndexedDB')
+        console.log('[createTask] 更新任务列表，当前任务数:', tasks.length + 1)
         setTasks(prev => [task, ...prev])
         resolve(task)
       }
-      request.onerror = () => reject(request.error)
+      request.onerror = () => {
+        console.error('[createTask] ❌ 保存失败:', request.error)
+        reject(request.error)
+      }
     })
   }, [])
 
