@@ -208,35 +208,7 @@ export default function WorkflowCanvas({
       // 非条件节点 - 渲染下一个节点
       if (node.nextNodeId && !renderedNodes.has(node.nextNodeId)) {
         nextNodes.push(
-          <div key={`${node.id}-next`} style={{ marginTop: 12 }}>
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              marginLeft: 120,
-              marginBottom: 4
-            }}>
-              <div style={{
-                width: 2,
-                height: 20,
-                background: 'linear-gradient(180deg, #1890ff 0%, #69c0ff 100%)',
-                position: 'relative'
-              }}>
-                <div style={{
-                  position: 'absolute',
-                  bottom: -5,
-                  left: -4,
-                  width: 0,
-                  height: 0,
-                  borderLeft: '5px solid transparent',
-                  borderRight: '5px solid transparent',
-                  borderTop: '7px solid #1890ff'
-                }} />
-              </div>
-              <Text type="secondary" style={{ fontSize: 11, marginLeft: 12, color: '#1890ff' }}>
-                ↓ 下一步
-              </Text>
-            </div>
+          <div key={`${node.id}-next`} style={{ marginTop: 8 }}>
             {renderNode(node.nextNodeId!, depth + 1)}
           </div>
         )

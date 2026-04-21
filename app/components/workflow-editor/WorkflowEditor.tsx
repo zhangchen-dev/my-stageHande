@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
-import { Layout, Button, Space, Card, Typography, Tag, message, Modal, Tooltip, Spin, Alert, Badge, Form, Input } from 'antd'
+import { Layout, Button, Space, Card, Typography, Tag, message, Modal, Tooltip, Spin, Alert, Badge, Form, Input, Dropdown } from 'antd'
 import {
   SaveOutlined,
   ArrowLeftOutlined,
@@ -38,6 +38,7 @@ export default function WorkflowEditor() {
   const [showTaskNameModal, setShowTaskNameModal] = useState(false)
   const [taskName, setTaskName] = useState('未命名工作流')
   const [taskForm] = Form.useForm()
+  const [lastSelectedType, setLastSelectedType] = useState<OperationType | null>(null)
 
   useEffect(() => {
     if (taskId) {
@@ -75,8 +76,19 @@ export default function WorkflowEditor() {
       request.onsuccess = () => {
         const taskData = request.result as any
         if (taskData && taskData.workflowConfig) {
-          setConfig(taskData.workflowConfig)
-          setOriginalConfig(taskData.workflowConfig)
+          let workflowConfig = taskData.workflowConfig
+
+          // 确保 startNodeId 有效
+          if (!workflowConfig.startNodeId || !workflowConfig.nodes?.find((n: WorkflowNode) => n.id === workflowConfig.startNodeId)) {
+            workflowConfig = {
+              ...workflowConfig,
+              startNodeId: workflowConfig.nodes?.[0]?.id || ''
+            }
+            console.log('[loadWorkflow] 自动修正 startNodeId:', workflowConfig.startNodeId)
+          }
+
+          setConfig(workflowConfig)
+          setOriginalConfig(workflowConfig)
           setTaskName(taskData.name || '未命名工作流')
         } else if (taskData && taskData.steps) {
           const convertedConfig = convertLegacyStepsToWorkflow(taskData.steps)
@@ -189,16 +201,23 @@ export default function WorkflowEditor() {
     setIsSaving(true)
     try {
       const workflowId = taskId || `workflow_${Date.now()}`
-      
+
       // 在保存前自动连接未指定 nextNodeId 的节点
       const connectedNodes = autoConnectNodes(config.nodes)
-      
+
+      // 确保 startNodeId 有效
+      let validStartNodeId = config.startNodeId
+      if (!validStartNodeId || !connectedNodes.find(n => n.id === validStartNodeId)) {
+        validStartNodeId = connectedNodes[0]?.id || ''
+        console.log('[saveWorkflow] 自动修正 startNodeId:', { old: config.startNodeId, new: validStartNodeId })
+      }
+
       const taskData = {
         id: workflowId,
         name: taskName,
         type: 'workflow',
         workflowConfig: {
-          ...config,
+          startNodeId: validStartNodeId,
           nodes: connectedNodes,
         },
         status: 'draft',
@@ -206,9 +225,10 @@ export default function WorkflowEditor() {
         updatedAt: new Date().toISOString(),
       }
 
-      console.log('[saveWorkflow] 保存工作流:', { 
-        id: workflowId, 
-        name: taskName, 
+      console.log('[saveWorkflow] 保存工作流:', {
+        id: workflowId,
+        name: taskName,
+        startNodeId: validStartNodeId,
         nodesCount: connectedNodes.length,
         autoConnectedNodes: connectedNodes.filter(n => n.nextNodeId).length
       })
@@ -219,14 +239,12 @@ export default function WorkflowEditor() {
 
       request.onsuccess = () => {
         // 更新本地状态为已连接的配置
-        setConfig({
-          ...config,
+        const savedConfig = {
+          startNodeId: validStartNodeId,
           nodes: connectedNodes,
-        })
-        setOriginalConfig({
-          ...config,
-          nodes: connectedNodes,
-        })
+        }
+        setConfig(savedConfig)
+        setOriginalConfig(savedConfig)
         setHasUnsavedChanges(false)
         setIsSaved(true)
         
@@ -293,6 +311,7 @@ export default function WorkflowEditor() {
     })
 
     setSelectedNode(newNodeId)
+    setLastSelectedType(type)
     message.success(`已添加 ${getTypeLabel(type)} 节点`)
   }
 
@@ -426,20 +445,21 @@ export default function WorkflowEditor() {
   const autoConnectNodes = (nodes: WorkflowNode[]): WorkflowNode[] => {
     const connectedNodes = nodes.map((node, index) => {
       const updatedNode = { ...node }
-      
-      // 如果没有手动指定 nextNodeId 且不是最后一个节点，则自动连接到顺序上的下一个节点
+
+      // 只有非条件节点才自动连接到顺序上的下一个节点
+      // 条件节点应该只使用 conditionTrueNodeId 和 conditionFalseNodeId
       if (!updatedNode.nextNodeId && index < nodes.length - 1 && updatedNode.type !== OperationType.CONDITION) {
         updatedNode.nextNodeId = nodes[index + 1].id
       }
-      
+
       return updatedNode
     })
-    
+
     console.log('[autoConnectNodes] 自动连接完成:', {
       totalNodes: connectedNodes.length,
       connections: connectedNodes.filter(n => n.nextNodeId).length
     })
-    
+
     return connectedNodes
   }
 
@@ -590,14 +610,26 @@ export default function WorkflowEditor() {
           style={{ flex: 2, overflow: 'auto' }}
           extra={
             <Space>
-              <Button
-                type="primary"
-                icon={<PlusOutlined />}
-                onClick={() => addNode(OperationType.OPEN_PAGE)}
-                size="small"
-              >
-                添加节点
-              </Button>
+              <Dropdown menu={{ items: [
+                { key: OperationType.CONDITION, label: '条件判断', onClick: () => addNode(OperationType.CONDITION) },
+                { key: OperationType.CLICK, label: '点击元素', onClick: () => addNode(OperationType.CLICK) },
+                { key: OperationType.OPEN_PAGE, label: '打开页面', onClick: () => addNode(OperationType.OPEN_PAGE) },
+                { key: OperationType.FORM_FILL, label: '表单填写', onClick: () => addNode(OperationType.FORM_FILL) },
+                { key: OperationType.SCROLL, label: '滚动页面', onClick: () => addNode(OperationType.SCROLL) },
+                { key: OperationType.HOVER, label: '悬停元素', onClick: () => addNode(OperationType.HOVER) },
+                { key: OperationType.SCRIPT_EXEC, label: '执行脚本', onClick: () => addNode(OperationType.SCRIPT_EXEC) },
+                { key: OperationType.NODE_SELECT, label: '选择节点', onClick: () => addNode(OperationType.NODE_SELECT) },
+                { key: OperationType.SCREENSHOT, label: '页面截取', onClick: () => addNode(OperationType.SCREENSHOT) },
+                { key: OperationType.AI_TASK, label: 'AI任务', onClick: () => addNode(OperationType.AI_TASK) },
+              ] }} trigger={['click']}>
+                <Button
+                  type="primary"
+                  icon={<PlusOutlined />}
+                  size="small"
+                >
+                  添加节点
+                </Button>
+              </Dropdown>
             </Space>
           }
         >
@@ -631,7 +663,14 @@ export default function WorkflowEditor() {
             <NodeConfigPanel
               node={config.nodes.find(n => n.id === selectedNode)!}
               allNodes={config.nodes}
-              onUpdate={(updates: Partial<WorkflowNode>) => updateNode(selectedNode, updates)}
+              isNewNode={lastSelectedType !== null && config.nodes.find(n => n.id === selectedNode)?.type === lastSelectedType}
+              lastSelectedType={lastSelectedType}
+              onUpdate={(updates: Partial<WorkflowNode>) => {
+                updateNode(selectedNode, updates)
+                if (updates.type) {
+                  setLastSelectedType(updates.type as OperationType)
+                }
+              }}
               onSave={() => {
                 const currentNode = config.nodes.find(n => n.id === selectedNode)
                 console.log('[保存节点配置] 节点数据:', currentNode)
@@ -639,7 +678,10 @@ export default function WorkflowEditor() {
                 console.log('[保存节点配置] startNodeId:', config.startNodeId)
                 message.success('节点配置已保存')
               }}
-              onClose={() => setSelectedNode(null)}
+              onClose={() => {
+                setSelectedNode(null)
+                setLastSelectedType(null)
+              }}
             />
           </Card>
         )}

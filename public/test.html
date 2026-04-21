@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>测试任务导入</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      max-width: 800px;
+      margin: 50px auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    .container {
+      background: white;
+      padding: 30px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    h1 { color: #1890ff; margin-bottom: 20px; }
+    .button {
+      display: inline-block;
+      padding: 12px 24px;
+      background: #1890ff;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 16px;
+      margin: 10px 10px 10px 0;
+    }
+    .button:hover { background: #40a9ff; }
+    .button.success { background: #52c41a; }
+    .button.success:hover { background: #73d13d; }
+    .log {
+      margin-top: 20px;
+      padding: 15px;
+      background: #f6f8fa;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 14px;
+      max-height: 400px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+    .status {
+      padding: 10px;
+      margin: 10px 0;
+      border-radius: 4px;
+      display: none;
+    }
+    .status.success { background: #f6ffed; border: 1px solid #b7eb8f; color: #52c41a; display: block; }
+    .status.error { background: #fff2f0; border: 1px solid #ffccc7; color: #ff4d4f; display: block; }
+    .status.info { background: #e6f7ff; border: 1px solid #91d5ff; color: #1890ff; display: block; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🧪 测试任务导入工具</h1>
+    <p>此工具用于导入 test-task.json 并测试工作流执行功能。</p>
+
+    <button class="button" onclick="importTask()">📥 导入任务到 IndexedDB</button>
+    <button class="button success" onclick="runTest()">▶️ 执行任务测试</button>
+    <a href="/" class="button">🏠 返回主页</a>
+
+    <div id="status" class="status"></div>
+    <div id="log" class="log">准备就绪...\n</div>
+  </div>
+
+  <script>
+    const logEl = document.getElementById('log')
+    const statusEl = document.getElementById('status')
+
+    function log(message) {
+      console.log(message)
+      logEl.textContent += new Date().toLocaleTimeString() + ' - ' + message + '\n'
+      logEl.scrollTop = logEl.scrollHeight
+    }
+
+    function showStatus(message, type) {
+      statusEl.textContent = message
+      statusEl.className = 'status ' + type
+    }
+
+    async function importTask() {
+      try {
+        showStatus('正在导入任务...', 'info')
+        log('开始导入 test-task.json...')
+
+        // 导入 JSON 文件
+        const response = await fetch('/test-task.json')
+        if (!response.ok) throw new Error('无法加载 test-task.json')
+        const taskData = await response.result
+
+        log('JSON 文件加载成功')
+        log('任务数据: ' + JSON.stringify(taskData, null, 2).substring(0, 500) + '...')
+
+        // 打开 IndexedDB
+        const db = await new Promise((resolve, reject) => {
+          const request = indexedDB.open('StagehandTestDB', 2)
+          request.onsuccess = () => resolve(request.result)
+          request.onerror = () => reject(request.error)
+
+          request.onupgradeneeded = (event) => {
+            const db = event.target.result
+            if (!db.objectStoreNames.contains('tasks')) {
+              db.createObjectStore('tasks', { keyPath: 'id' })
+            }
+          }
+        })
+
+        log('IndexedDB 连接成功')
+
+        // 处理数据
+        const taskToSave = Array.isArray(taskData) ? taskData[0] : taskData
+
+        // 确保 startNodeId 有效
+        if (!taskToSave.workflowConfig?.startNodeId && taskToSave.workflowConfig?.nodes?.length > 0) {
+          taskToSave.workflowConfig.startNodeId = taskToSave.workflowConfig.nodes[0].id
+          log('自动设置 startNodeId: ' + taskToSave.workflowConfig.startNodeId)
+        }
+
+        // 保存到数据库
+        await new Promise((resolve, reject) => {
+          const store = db.transaction('tasks', 'readwrite').objectStore('tasks')
+          const request = store.put(taskToSave)
+          request.onsuccess = () => resolve(request.result)
+          request.onerror = () => reject(request.error)
+        })
+
+        log('✅ 任务已保存到 IndexedDB')
+        log('任务 ID: ' + taskToSave.id)
+        log('startNodeId: ' + taskToSave.workflowConfig?.startNodeId)
+        log('节点数量: ' + taskToSave.workflowConfig?.nodes?.length)
+
+        showStatus('✅ 任务导入成功！现在可以点击"执行任务测试"按钮', 'success')
+
+        // 保存任务 ID 以便后续使用
+        window.currentTaskId = taskToSave.id
+
+      } catch (error) {
+        log('❌ 导入失败: ' + error.message)
+        showStatus('❌ 导入失败: ' + error.message, 'error')
+        console.error(error)
+      }
+    }
+
+    function runTest() {
+      if (!window.currentTaskId) {
+        showStatus('请先导入任务', 'error')
+        return
+      }
+
+      log('跳转到执行页面...')
+      window.location.href = '/?run=' + window.currentTaskId
+    }
+
+    // 页面加载时自动导入
+    window.addEventListener('load', () => {
+      log('页面加载完成，点击按钮开始测试')
+    })
+  </script>
+</body>
+</html>

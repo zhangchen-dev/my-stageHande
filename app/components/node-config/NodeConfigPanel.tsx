@@ -7,9 +7,27 @@ import { DeleteOutlined, SaveOutlined } from '@ant-design/icons'
 const { Text, Paragraph } = Typography
 const { TextArea } = Input
 
+const getTypeLabel = (type: OperationType): string => {
+  const labels: Record<OperationType, string> = {
+    [OperationType.CONDITION]: '条件判断',
+    [OperationType.CLICK]: '点击元素',
+    [OperationType.OPEN_PAGE]: '打开页面',
+    [OperationType.FORM_FILL]: '表单填写',
+    [OperationType.SCROLL]: '滚动页面',
+    [OperationType.NODE_SELECT]: '选择节点',
+    [OperationType.SCRIPT_EXEC]: '执行脚本',
+    [OperationType.HOVER]: '悬停元素',
+    [OperationType.SCREENSHOT]: '页面截取',
+    [OperationType.AI_TASK]: 'AI任务',
+  }
+  return labels[type] || type
+}
+
 interface NodeConfigPanelProps {
   node: WorkflowNode
   allNodes: WorkflowNode[]
+  isNewNode?: boolean
+  lastSelectedType?: OperationType | null
   onUpdate: (updates: Partial<WorkflowNode>) => void
   onSave?: () => void
   onClose: () => void
@@ -18,6 +36,8 @@ interface NodeConfigPanelProps {
 export default function NodeConfigPanel({
   node,
   allNodes,
+  isNewNode = false,
+  lastSelectedType,
   onUpdate,
   onSave,
 }: NodeConfigPanelProps) {
@@ -383,7 +403,8 @@ export default function NodeConfigPanel({
         </div>
 
         <Form.Item label="操作类型" name="type">
-          <Select 
+          <Select
+            disabled={isNewNode}
             options={[
               { value: OperationType.CONDITION, label: '条件判断' },
               { value: OperationType.CLICK, label: '点击元素' },
@@ -399,6 +420,18 @@ export default function NodeConfigPanel({
             onChange={(value) => onUpdate({ type: value as OperationType })}
           />
         </Form.Item>
+        {isNewNode && (
+          <div style={{ 
+            padding: '8px 12px', 
+            background: '#f6f8fa', 
+            borderRadius: 4, 
+            fontSize: 11, 
+            color: '#666',
+            marginBottom: 8
+          }}>
+            ℹ️ 当前节点类型为新建时选择的「{getTypeLabel(node.type)}」，如需修改请保存后重新编辑
+          </div>
+        )}
 
         <Form.Item label="执行策略" name="strategy">
           <Select 

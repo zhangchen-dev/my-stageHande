@@ -15,12 +15,29 @@ export interface WorkflowConfig {
 
 export function convertWorkflowConfigToSteps(workflowConfig: WorkflowConfig): any[] {
   const steps: any[] = []
+
+  if (!workflowConfig.nodes || workflowConfig.nodes.length === 0) {
+    console.warn('[convertWorkflowConfigToSteps] 工作流配置为空')
+    return steps
+  }
+
+  // 确保 startNodeId 有效
   let currentNodeId = workflowConfig.startNodeId
+  if (!currentNodeId || !workflowConfig.nodes.find(n => n.id === currentNodeId)) {
+    currentNodeId = workflowConfig.nodes[0].id
+    console.log('[convertWorkflowConfigToSteps] 使用第一个节点作为起始节点:', currentNodeId)
+  }
+
   const nodeMap = new Map(workflowConfig.nodes.map((n) => [n.id, n]))
-  
-  while (currentNodeId) {
+  const visitedNodes = new Set<string>()
+
+  while (currentNodeId && !visitedNodes.has(currentNodeId)) {
+    visitedNodes.add(currentNodeId)
     const node = nodeMap.get(currentNodeId)
-    if (!node) break
+    if (!node) {
+      console.warn(`[convertWorkflowConfigToSteps] 未找到节点: ${currentNodeId}`)
+      break
+    }
     
     let stepType = 'script'
     let stepData: any = {}
