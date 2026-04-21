@@ -29,9 +29,67 @@ export class WorkflowEngine {
   private context: WorkflowContext
   private records: StepExecutionRecord[] = []
   private stepMap: Map<string, TestStep> = new Map()
+  private onLog?: (message: string) => void
 
-  constructor(context: WorkflowContext) {
+  constructor(context: WorkflowContext, onLog?: (message: string) => void) {
     this.context = context
+    this.onLog = onLog
+  }
+
+  /**
+   * 安全调用 stagehand.observe，带重试和详细日志
+   */
+  private async safeObserve(instruction: string, options?: { page?: any }, maxRetries = 1): Promise<any[]> {
+    const { stagehand, page } = this.context
+    const actualOptions = options || { page }
+
+    for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+      try {
+        this.onLog?.(`[观察] 正在分析: ${instruction.substring(0, 50)}... (尝试 ${attempt}/${maxRetries + 1})`)
+        const result = await stagehand.observe(instruction, actualOptions)
+        this.onLog?.(`[观察] 成功，找到 ${Array.isArray(result) ? result.length : 0} 个元素`)
+        return result || []
+      } catch (e: any) {
+        const errorMsg = e?.message || String(e)
+        this.onLog?.(`[观察] 失败: ${errorMsg.substring(0, 100)}`)
+
+        if (attempt <= maxRetries) {
+          this.onLog?.(`[观察] 等待 1.5 秒后重试...`)
+          await new Promise(resolve => setTimeout(resolve, 1500))
+        } else {
+          throw new Error(`Stagehand observe 失败: ${errorMsg}`)
+        }
+      }
+    }
+    return []
+  }
+
+  /**
+   * 安全调用 stagehand.act，带重试和详细日志
+   */
+  private async safeAct(instruction: string, options?: { page?: any }, maxRetries = 1): Promise<any> {
+    const { stagehand, page } = this.context
+    const actualOptions = options || { page }
+
+    for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+      try {
+        this.onLog?.(`[操作] 正在执行: ${instruction.substring(0, 50)}... (尝试 ${attempt}/${maxRetries + 1})`)
+        const result = await stagehand.act(instruction, actualOptions)
+        this.onLog?.(`[操作] ${result?.success ? '成功' : '失败'}`)
+        return result
+      } catch (e: any) {
+        const errorMsg = e?.message || String(e)
+        this.onLog?.(`[操作] 失败: ${errorMsg.substring(0, 100)}`)
+
+        if (attempt <= maxRetries) {
+          this.onLog?.(`[操作] 等待 1.5 秒后重试...`)
+          await new Promise(resolve => setTimeout(resolve, 1500))
+        } else {
+          throw new Error(`Stagehand act 失败: ${errorMsg}`)
+        }
+      }
+    }
+    return { success: false, message: 'Unknown error' }
   }
 
   /**
@@ -147,11 +205,11 @@ export class WorkflowEngine {
     for (const step of steps) {
       if (step.type === 'click' || step.type === 'fill' || step.type === 'hover') {
         try {
-          // 使用 observe 查找元素，不进行实际操作
-          const observed = await this.context.stagehand.observe({
-            instruction: step.description,
-            page: this.context.page
-          })
+          // 使用 safeObserve 查找元素，不进行实际操作
+          const observed = await this.safeObserve(
+            step.description || `${step.type} action`,
+            { page: this.context.page }
+          )
           if (observed && observed.length > 0) {
             actions.push({
               stepId: step.id,
@@ -177,30 +235,30 @@ export class WorkflowEngine {
     totalSteps: number
   ): Promise<{ success: boolean; error?: string }> {
     const logPrefix = `[步骤 ${currentIndex}/${totalSteps}]`
-    console.log(`${logPrefix} ${step.type}: ${step.description}`)
+    this.onLog?.(`${logPrefix} 开始执行: ${step.type} - ${step.description}`)
 
     const record = await this.executeSingleStep(step)
     this.records.push(record)
 
     if (record.status === 'success') {
-      console.log(`✅ ${step.description} (策略: ${record.strategy})`)
-      
+      this.onLog?.(`✅ ${step.description} 成功 (策略: ${record.strategy}, 耗时: ${(record.duration || 0) / 1000}s)`)
+
       // 根据步骤类型处理流程
       switch (step.type) {
         case 'condition':
           // 条件判断步骤：执行成功后执行 thenSteps
           return await this.executeConditionBranch(step, currentIndex, totalSteps)
-          
+
         case 'conditionLoop':
           // 条件循环步骤：执行成功后执行 loopSteps，然后回到本步骤
           return await this.executeLoopBranch(step, currentIndex, totalSteps)
-          
+
         default:
           // 普通步骤：继续执行后续
           return { success: true }
       }
     } else {
-      console.log(`❌ ${step.description} - ${record.error}`)
+      this.onLog?.(`❌ ${step.description} 失败: ${record.error}`)
       // 执行失败，执行后续步骤（跳出当前分支）
       return { success: true }
     }
@@ -310,9 +368,9 @@ export class WorkflowEngine {
     }
 
     try {
-      // 非 goto 步骤等待页面稳定
+      // 非 goto 步骤等待页面稳定（优化：从8秒减少到3秒）
       if (step.type !== 'goto') {
-        await this.waitForDomSettle(8000)
+        await this.waitForDomSettle(3000)
       }
 
       switch (step.type) {
@@ -407,12 +465,12 @@ export class WorkflowEngine {
         return
       }
     } else {
-      // AI 或自动模式：使用 observe 检测元素是否存在
+      // AI 或自动模式：使用 safeObserve 检测元素是否存在
       try {
-        const observed = await stagehand.observe({
-          instruction: step.description,
-          page
-        })
+        const observed = await this.safeObserve(
+          step.description || 'check if element exists',
+          { page }
+        )
 
         if (observed && observed.length > 0) {
           record.status = 'success'
@@ -453,13 +511,31 @@ export class WorkflowEngine {
    */
   private async executeGoto(step: TestStep, record: StepExecutionRecord): Promise<void> {
     if (!step.value) throw new Error('Goto 步骤必须提供 URL')
-    
-    await this.context.page.goto(step.value, { 
-      waitUntil: 'domcontentloaded', 
-      timeout: 30000 
+
+    console.log(`[Goto] 开始导航到: ${step.value.substring(0, 80)}...`)
+
+    await this.context.page.goto(step.value, {
+      waitUntil: 'networkidle',
+      timeout: 60000
     })
-    await this.waitForDomSettle(15000)
-    
+
+    console.log('[Goto] 页面网络请求已完成，开始等待DOM稳定...')
+    await this.waitForDomSettle(10000)
+
+    console.log('[Goto] 使用 Stagehand observe 确认页面就绪...')
+    if (this.context.stagehand?.observe) {
+      try {
+        await this.safeObserve(
+          'page loaded and ready for interaction',
+          { page: this.context.page }
+        )
+        console.log('[Goto] Stagehand 确认页面已就绪')
+      } catch (e) {
+        console.warn('[Goto] Stagehand observe 失败，继续执行:', (e as Error).message)
+      }
+    }
+
+    console.log(`[Goto] 导航完成，总耗时准备就绪`)
     record.status = 'success'
   }
 
@@ -495,8 +571,8 @@ export class WorkflowEngine {
         instruction = instruction || 'scroll to bottom of the page'
       }
 
-      const result = await stagehand.act(instruction, { page })
-      
+      const result = await this.safeAct(instruction, { page })
+
       if (!result.success) {
         // 如果 AI 模式失败，回退到 JavaScript 滚动
         await page.evaluate((value: string) => {
@@ -572,16 +648,16 @@ export class WorkflowEngine {
     
     try {
       // 查找引导元素（通常是高亮、tooltip、modal 等）
-      const observed = await stagehand.observe({
-        instruction: step.description || 'find guide elements like tooltips, highlights, or next buttons',
-        page
-      })
+      const observed = await this.safeObserve(
+        step.description || 'find guide elements like tooltips, highlights, or next buttons',
+        { page }
+      )
 
       if (observed && observed.length > 0) {
         // 执行第一个可用的引导动作
         for (const action of observed) {
           try {
-            const result = await stagehand.act(action, { page })
+            const result = await this.safeAct(action, { page })
             if (result.success) {
               record.status = 'success'
               console.log(`[引导] 成功执行引导动作`)
@@ -598,7 +674,7 @@ export class WorkflowEngine {
       const commonButtons = ['next', 'close', 'got it', 'start', 'begin', 'ok', 'done']
       for (const buttonText of commonButtons) {
         try {
-          const result = await stagehand.act(`click ${buttonText} button`, { page })
+          const result = await this.safeAct(`click ${buttonText} button`, { page })
           if (result.success) {
             record.status = 'success'
             console.log(`[引导] 点击了 "${buttonText}" 按钮`)
@@ -652,11 +728,11 @@ export class WorkflowEngine {
           }
         }
       } else {
-        // AI 模式：使用 observe 验证条件
-        const observed = await stagehand.observe({
-          instruction: step.description,
-          page
-        })
+        // AI 模式：使用 safeObserve 验证条件
+        const observed = await this.safeObserve(
+          step.description || 'verify condition',
+          { page }
+        )
 
         if (observed && observed.length > 0) {
           assertResult = true
@@ -689,6 +765,7 @@ export class WorkflowEngine {
 
   /**
    * 执行交互操作（click/fill/hover）
+   * 支持循环模式：当 step.loop=true 时，会持续尝试直到成功或达到最大次数
    * 使用 observe + act 模式，比逐个调用 act() 快 2-3 倍
    */
   private async executeInteraction(step: TestStep, record: StepExecutionRecord): Promise<void> {
@@ -698,56 +775,100 @@ export class WorkflowEngine {
       throw new Error(`TASK_ABORTED: ${getAbortReason(taskId) || '用户终止'}`)
     }
 
-    let observedActions: any[] = []
-    try {
-      observedActions = await stagehand.observe({
-        instruction: step.description,
-        page
-      })
-    } catch (e) {
-      console.log(`[交互] observe 失败，直接尝试 act: ${(e as Error).message}`)
-    }
+    const isLoopMode = step.loop === true
+    const maxIterations = isLoopMode ? (step.maxLoopIterations || 10) : 1
 
-    if (taskId && isTaskAborted(taskId)) {
-      throw new Error(`TASK_ABORTED: ${getAbortReason(taskId) || '用户终止'}`)
-    }
+    this.onLog?.(`[交互] ${isLoopMode ? '🔄 循环模式' : '单次模式'}，最大迭代: ${maxIterations}次`)
 
-    if (observedActions && observedActions.length > 0) {
-      console.log(`[交互] 观察到 ${observedActions.length} 个可执行动作`)
-      
-      for (const action of observedActions) {
-        if (taskId && isTaskAborted(taskId)) {
-          throw new Error(`TASK_ABORTED: ${getAbortReason(taskId) || '用户终止'}`)
+    for (let iteration = 1; iteration <= maxIterations; iteration++) {
+      if (taskId && isTaskAborted(taskId)) {
+        throw new Error(`TASK_ABORTED: ${getAbortReason(taskId) || '用户终止'}`)
+      }
+
+      if (isLoopMode) {
+        this.onLog?.(`[交互] 第 ${iteration}/${maxIterations} 次迭代`)
+      }
+
+      let observedActions: any[] = []
+      try {
+        observedActions = await this.safeObserve(
+          step.description || 'find interactive elements',
+          { page }
+        )
+      } catch (e) {
+        this.onLog?.(`[交互] 观察失败: ${(e as Error).message.substring(0, 100)}`)
+
+        if (!isLoopMode) {
+          console.log(`[交互] observe 失败，直接尝试 act: ${(e as Error).message}`)
         }
-        
-        try {
-          const result = await stagehand.act(action, { page })
-          if (result.success) {
-            record.status = 'success'
-            await this.takeScreenshot(step, record, 'success')
-            return
+      }
+
+      if (taskId && isTaskAborted(taskId)) {
+        throw new Error(`TASK_ABORTED: ${getAbortReason(taskId) || '用户终止'}`)
+      }
+
+      let success = false
+
+      if (observedActions && observedActions.length > 0) {
+        this.onLog?.(`[交互] 观察到 ${observedActions.length} 个可执行动作`)
+
+        for (const action of observedActions) {
+          if (taskId && isTaskAborted(taskId)) {
+            throw new Error(`TASK_ABORTED: ${getAbortReason(taskId) || '用户终止'}`)
           }
-        } catch (e) {
-          console.log(`[交互] 动作执行失败: ${(e as Error).message}`)
+
+          try {
+            const result = await this.safeAct(action, { page })
+            if (result.success) {
+              record.status = 'success'
+              await this.takeScreenshot(step, record, 'success')
+              this.onLog?.(`[交互] ✅ 成功 (第${iteration}次)`)
+              return
+            }
+          } catch (e) {
+            this.onLog?.(`[交互] 动作失败: ${(e as Error).message.substring(0, 100)}`)
+          }
         }
+      }
+
+      this.onLog?.(`[交互] 使用直接 act 模式`)
+
+      let instruction = step.description
+      if (step.type === 'fill' && step.value) {
+        instruction = `type "${step.value}" into ${step.description}`
+      }
+
+      try {
+        const result = await this.safeAct(instruction, { page })
+
+        if (result.success) {
+          record.status = 'success'
+          await this.takeScreenshot(step, record, 'success')
+          this.onLog?.(`[交互] ✅ 直接act成功 (第${iteration}次)`)
+          return
+        }
+      } catch (e) {
+        this.onLog?.(`[交互] 直接act失败: ${(e as Error).message.substring(0, 100)}`)
+      }
+
+      if (!isLoopMode) {
+        throw new Error('交互操作失败')
+      }
+
+      if (iteration < maxIterations) {
+        const waitTime = Math.min(2000, step.maxWaitTime ? step.maxWaitTime / maxIterations : 1000)
+        this.onLog?.(`[交互] 等待 ${waitTime}ms 后重试...`)
+        await new Promise(resolve => setTimeout(resolve, waitTime))
       }
     }
 
-    console.log(`[交互] 使用直接 act 模式`)
-    
-    let instruction = step.description
-    if (step.type === 'fill' && step.value) {
-      instruction = `type "${step.value}" into ${step.description}`
+    if (isLoopMode) {
+      this.onLog?.(`[交互] ⚠️ 循环结束，未找到可点击元素（这是正常的，可能引导已完成）`)
+      record.status = 'success'
+      record.result = `循环执行${maxIterations}次后结束`
+    } else {
+      throw new Error('交互操作失败')
     }
-
-    const result = await stagehand.act(instruction, { page })
-    
-    if (!result.success) {
-      throw new Error(result.message || '交互操作失败')
-    }
-
-    record.status = 'success'
-    await this.takeScreenshot(step, record, 'success')
   }
 
   /**
@@ -769,13 +890,51 @@ export class WorkflowEngine {
 
   /**
    * 执行 JavaScript
+   * 支持选择器模式：如果有 selector，先定位元素再执行操作
    */
   private async executeJs(step: TestStep, record: StepExecutionRecord): Promise<void> {
-    if (!step.value) {
-      throw new Error('JS 步骤必须提供 JavaScript 代码')
+    const { page } = this.context
+
+    if (step.selector) {
+      this.onLog?.(`[JS] 检测到选择器模式，使用选择器定位元素`)
+
+      const selectorStr = this.buildSelectorString(step.selector)
+      if (!selectorStr) {
+        throw new Error('JS 步骤的选择器无效')
+      }
+
+      try {
+        const element = page.locator(selectorStr).first()
+        const count = await element.count()
+
+        if (count === 0) {
+          throw new Error(`未找到元素: ${selectorStr}`)
+        }
+
+        this.onLog?.(`[JS] 找到元素: ${selectorStr}，准备点击`)
+
+        await element.click({
+          timeout: 10000,
+          force: true
+        })
+
+        record.result = `成功点击元素: ${selectorStr}`
+        record.selectorUsed = step.selector
+        record.status = 'success'
+        this.onLog?.(`[JS] ✅ 点击成功`)
+        return
+      } catch (e) {
+        this.onLog?.(`[JS] 选择器点击失败: ${(e as Error).message}`)
+        throw e
+      }
     }
 
-    const result = await this.context.page.evaluate((code: string) => {
+    if (!step.value) {
+      throw new Error('JS 步骤必须提供 JavaScript 代码或选择器')
+    }
+
+    this.onLog?.(`[JS] 执行 JavaScript 代码`)
+    const result = await page.evaluate((code: string) => {
       try {
         return eval(code)
       } catch (e) {
@@ -785,6 +944,7 @@ export class WorkflowEngine {
 
     record.result = JSON.stringify(result)
     record.status = 'success'
+    this.onLog?.(`[JS] ✅ 执行完成`)
   }
 
   /**
@@ -892,6 +1052,6 @@ export async function executeWorkflow(
     taskId
   }
 
-  const engine = new WorkflowEngine(context)
+  const engine = new WorkflowEngine(context, onLog)
   return engine.execute(steps)
 }

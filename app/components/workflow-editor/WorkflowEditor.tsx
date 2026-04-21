@@ -522,7 +522,17 @@ export default function WorkflowEditor() {
 
     const params = new URLSearchParams()
     params.set('run', taskId)
-    router.push(`/?${params.toString()}`)
+    
+    try {
+      params.set('workflowConfig', JSON.stringify(config))
+      console.log('[executeWorkflow] 执行工作流:', { 
+        taskId, 
+        nodesCount: config.nodes.length,
+        startNodeId: config.startNodeId 
+      })
+    } catch (e) {
+      console.warn('[executeWorkflow] 序列化配置失败，将从数据库读取', e)
+    }
   }
 
   if (isLoading) {
