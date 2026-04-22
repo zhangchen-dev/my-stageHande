@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
-import { Layout, Button, Space, Card, Typography, Tag, message, Modal, Empty, Spin, Badge, Progress, Alert } from 'antd'
+import { Layout, Button, Space, Card, Typography, Tag, message, Modal, Empty, Spin, Badge, Progress, Alert, Radio } from 'antd'
 import {
   PlayCircleOutlined,
   StopOutlined,
@@ -18,6 +18,7 @@ import {
 import { useDatabase } from '@/hooks/useDatabase'
 import {
   TestTask,
+  TestStep,
   LogEntry,
   ExecutionStrategy,
   TestResult,
@@ -29,7 +30,6 @@ import LogPanel from '@/app/components/log-panel/LogPanel'
 import ResultModal from '@/app/components/result-modal/ResultModal'
 import NewTaskModal from '@/app/components/new-task-modal/NewTaskModal'
 import LogManagement from '@/app/components/log-management/LogManagement'
-import { logStorage } from '@/lib/log-storage'
 
 const { Header, Content, Sider } = Layout
 const { Title } = Typography
@@ -44,6 +44,7 @@ export default function HomePage() {
   const searchParams = useSearchParams()
   const runTaskId = searchParams.get('run')
   const workflowConfigStr = searchParams.get('workflowConfig')
+  const useHeadfulParam = searchParams.get('useHeadful')
 
   const {
     tasks,
@@ -77,6 +78,17 @@ export default function HomePage() {
   const isStartingRef = useRef(false)
   const isStoppedRef = useRef(false)
   const initDoneRef = useRef(false)
+  const logsRef = useRef<LogEntry[]>([])
+
+  const addLog = useCallback((log: LogEntry) => {
+    logsRef.current = [...logsRef.current, log]
+    setLogs(prev => [...prev, log])
+  }, [])
+
+  const clearLogs = useCallback(() => {
+    logsRef.current = []
+    setLogs([])
+  }, [])
 
   useEffect(() => {
     const runWorkflowTask = async () => {
@@ -140,10 +152,14 @@ export default function HomePage() {
           return
         }
 
+        if (useHeadfulParam === 'true') {
+          console.log('[执行] 使用有头浏览器模式')
+        }
+
         console.log(`[执行] 开始执行任务: ${taskToRun.name}, 步骤数: ${taskToRun.steps.length}`)
         
         taskRef.current = taskToRun
-        startTest(taskToRun)
+        startTest(taskToRun, useHeadfulParam === 'true')
       } catch (error) {
         console.error('加载工作流配置失败:', error)
         message.error('加载工作流配置失败')
@@ -373,7 +389,7 @@ export default function HomePage() {
 
             if (taskData.workflowConfig) {
               try {
-                const updatedTask = { ...newTask, workflowConfig: taskData.workflowConfig, type: 'workflow' }
+                const updatedTask = { ...newTask, workflowConfig: taskData.workflowConfig, type: 'workflow' as const }
                 await updateTask(updatedTask)
                 console.log('[导入] ✅ 工作流配置已保存')
                 importedTasks.push(updatedTask)
@@ -454,6 +470,7 @@ export default function HomePage() {
 
   const saveExecutionLog = async (taskId: string, taskName: string, status: 'success' | 'error' | 'aborted', startTime: string) => {
     try {
+      const currentLogs = logsRef.current
       const executionLog = {
         id: `log_${Date.now()}`,
         taskId,
@@ -462,21 +479,83 @@ export default function HomePage() {
         endTime: new Date().toISOString(),
         duration: Date.now() - new Date(startTime).getTime(),
         status,
-        logs: logs,
-        stepsCount: logs.filter(l => l.stepId).length,
-        successSteps: logs.filter(l => l.level === 'success').length,
-        failedSteps: logs.filter(l => l.level === 'error').length,
+        logs: currentLogs,
+        stepsCount: currentLogs.filter(l => l.stepId).length,
+        successSteps: currentLogs.filter(l => l.level === 'success').length,
         createdAt: new Date().toISOString(),
       }
       
-      await logStorage.saveLog(executionLog)
-      console.log('[日志] 执行日志已保存:', executionLog.id)
+      console.log('[日志] 准备保存执行日志:', {
+        id: executionLog.id,
+        taskId,
+        taskName,
+        status,
+        logsCount: currentLogs.length
+      })
+      
+      const response = await fetch('/api/logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(executionLog),
+      })
+      
+      const data = await response.json()
+      if (data.success) {
+        console.log('[日志] 执行日志已保存:', executionLog.id)
+      } else {
+        console.error('[日志] 保存失败:', data.error)
+      }
     } catch (error) {
       console.error('[日志] 保存执行日志失败:', error)
     }
   }
 
-  const startTest = async (task: TestTask) => {
+  const handleRunTask = (task: TestTask) => {
+    if (runningTaskId) {
+      message.warning('已有任务正在执行中，请先终止当前任务')
+      return
+    }
+
+    let selectedHeadful = false
+
+    Modal.confirm({
+      title: '执行任务',
+      icon: <PlayCircleOutlined style={{ color: '#1890ff' }} />,
+      content: (
+        <div style={{ marginTop: 16 }}>
+          <p style={{ marginBottom: 12 }}>请选择浏览器运行模式：</p>
+          <Radio.Group 
+            defaultValue={false} 
+            onChange={(e) => { selectedHeadful = e.target.value }}
+            style={{ width: '100%' }}
+          >
+            <div style={{ marginBottom: 8 }}>
+              <Radio value={false}>
+                <span style={{ fontWeight: 500 }}>无头模式</span>
+                <span style={{ color: '#666', fontSize: 12, marginLeft: 8 }}>(后台运行，不显示浏览器窗口)</span>
+              </Radio>
+            </div>
+            <div>
+              <Radio value={true}>
+                <span style={{ fontWeight: 500 }}>有头模式</span>
+                <span style={{ color: '#666', fontSize: 12, marginLeft: 8 }}>(显示浏览器窗口，便于调试)</span>
+              </Radio>
+            </div>
+          </Radio.Group>
+        </div>
+      ),
+      okText: '开始执行',
+      cancelText: '取消',
+      width: 480,
+      onOk: () => {
+        startTest(task, selectedHeadful)
+      },
+    })
+  }
+
+  const startTest = async (task: TestTask, headful?: boolean) => {
+    const actualUseHeadful = headful !== undefined ? headful : useHeadful
+    
     let taskToRun = task
     if (((task as any).type === 'workflow' || (task as any).workflowConfig)) {
       const workflowConfig = (task as any).workflowConfig
@@ -503,7 +582,7 @@ export default function HomePage() {
     isStoppedRef.current = false
     setRunningTaskId(taskToRun.id)
     taskRef.current = taskToRun
-    setLogs([])
+    clearLogs()
     
     const startTime = new Date().toISOString()
     const testId = `test_${Date.now()}`
@@ -527,9 +606,10 @@ export default function HomePage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           steps: taskToRun.steps, 
-          useHeadful, 
+          useHeadful: actualUseHeadful, 
           strategy: defaultStrategy,
-          testId
+          testId,
+          stepInterval: taskToRun.stepInterval || 10000
         }),
         signal: controller.signal,
       })
@@ -556,7 +636,7 @@ export default function HomePage() {
               const log = JSON.parse(line.slice(6)) as LogEntry
               
               if (!isStoppedRef.current) {
-                setLogs(prev => [...prev, log])
+                addLog(log)
               }
 
               if (log.message.includes('测试完成') || log.message.includes('测试失败') || log.message.includes('测试异常')) {
@@ -611,7 +691,7 @@ export default function HomePage() {
               error: error instanceof Error ? error.stack : undefined,
             },
           }
-          setLogs(prev => [...prev, finalLog])
+          addLog(finalLog)
           
           message.error('测试执行失败: ' + errorMessage)
           
@@ -625,7 +705,8 @@ export default function HomePage() {
     } finally {
       if (!isStoppedRef.current) {
         const finalTask = taskRef.current
-        const isFailed = logs.some(l => l.level === 'error')
+        const currentLogs = logsRef.current
+        const isFailed = currentLogs.some(l => l.level === 'error')
         
         if (finalTask) {
           saveExecutionLog(
@@ -660,7 +741,7 @@ export default function HomePage() {
     
     isStoppedRef.current = true
     
-    setLogs(prev => [...prev, {
+    addLog({
       timestamp: new Date().toISOString(),
       level: 'warning',
       message: `⚹️ 正在终止任务执行...`,
@@ -669,7 +750,7 @@ export default function HomePage() {
         taskId: currentTaskId,
         testId: testIdToAbort,
       },
-    }])
+    })
     
     setRunningTaskId(null)
     setAbortController(null)
@@ -714,7 +795,7 @@ export default function HomePage() {
         new Date(Date.now() - 10000).toISOString()
       ).catch(e => console.error('[日志] 保存失败:', e))
       
-      setLogs(prev => [...prev, {
+      addLog({
         timestamp: new Date().toISOString(),
         level: 'warning',
         message: `✅ 任务已成功终止`,
@@ -722,7 +803,7 @@ export default function HomePage() {
           totalSteps: currentTask.steps.length,
           taskId: currentTaskId,
         },
-      }])
+      })
       
       message.success('任务已终止')
       
@@ -898,7 +979,7 @@ export default function HomePage() {
                     isRunning={runningTaskId === task.id}
                     isTerminated={terminatedTaskId === task.id}
                     latestResult={getLatestResult(task.id)}
-                    onRun={() => startTest(task)}
+                    onRun={() => handleRunTask(task)}
                     onStop={stopTest}
                     onEdit={() => {
                       const params = new URLSearchParams()
@@ -920,7 +1001,7 @@ export default function HomePage() {
           <LogPanel 
             logs={logs} 
             isRunning={!!runningTaskId} 
-            onClear={() => setLogs([])}
+            onClear={clearLogs}
             taskName={runningTask?.name}
           />
         </Sider>

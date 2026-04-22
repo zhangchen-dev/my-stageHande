@@ -1,14 +1,33 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { Card, Table, Button, Space, DatePicker, Modal, Typography, Tag, Empty, message, Input, Popconfirm } from 'antd'
-import { DeleteOutlined, EyeOutlined, SearchOutlined, ClearOutlined } from '@ant-design/icons'
-import { ExecutionLog } from '@/types/execution-log'
-import { logStorage } from '@/lib/log-storage'
+import { useState, useEffect, useCallback } from 'react'
+import { Card, Table, Button, Space, DatePicker, Modal, Typography, Tag, Empty, message, Input, Popconfirm, Spin } from 'antd'
+import { DeleteOutlined, EyeOutlined, SearchOutlined, ClearOutlined, ReloadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 
 const { Text, Paragraph } = Typography
 const { RangePicker } = DatePicker
+
+interface LogEntry {
+  timestamp: string
+  level: string
+  message: string
+  details?: any
+}
+
+interface ExecutionLog {
+  id: string
+  taskId: string
+  taskName: string
+  status: 'running' | 'success' | 'error' | 'aborted'
+  startTime: string
+  endTime?: string
+  duration?: number
+  stepsCount: number
+  successSteps: number
+  logs: LogEntry[]
+  createdAt: string
+}
 
 interface LogManagementProps {
   visible: boolean
@@ -23,39 +42,41 @@ export default function LogManagement({ visible, onClose }: LogManagementProps) 
   const [dateRange, setDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(null)
   const [searchText, setSearchText] = useState('')
 
+  const loadLogs = useCallback(async () => {
+    setLoading(true)
+    try {
+      const params = new URLSearchParams()
+      if (dateRange && dateRange[0] && dateRange[1]) {
+        params.set('startDate', dateRange[0].startOf('day').toISOString())
+        params.set('endDate', dateRange[1].endOf('day').toISOString())
+      }
+
+      const response = await fetch(`/api/logs?${params.toString()}`)
+      const data = await response.json()
+
+      if (data.success) {
+        setLogs(data.logs)
+      } else {
+        message.error(data.error || '加载日志失败')
+        setLogs([])
+      }
+    } catch (error) {
+      console.error('加载日志失败:', error)
+      message.error('加载日志失败')
+      setLogs([])
+    } finally {
+      setLoading(false)
+    }
+  }, [dateRange])
+
   useEffect(() => {
     if (visible) {
       loadLogs()
     }
-  }, [visible])
+  }, [visible, loadLogs])
 
   useEffect(() => {
-    filterLogs()
-  }, [logs, dateRange, searchText])
-
-  const loadLogs = async () => {
-    setLoading(true)
-    try {
-      const allLogs = await logStorage.getAllLogs()
-      setLogs(allLogs)
-    } catch (error) {
-      console.error('加载日志失败:', error)
-      message.error('加载日志失败')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const filterLogs = () => {
     let result = [...logs]
-
-    if (dateRange && dateRange[0] && dateRange[1]) {
-      result = result.filter(log => {
-        const logDate = dayjs(log.startTime)
-        return logDate.isAfter(dateRange[0]!.startOf('day')) && 
-               logDate.isBefore(dateRange[1]!.endOf('day'))
-      })
-    }
 
     if (searchText) {
       const search = searchText.toLowerCase()
@@ -67,13 +88,19 @@ export default function LogManagement({ visible, onClose }: LogManagementProps) 
     }
 
     setFilteredLogs(result)
-  }
+  }, [logs, searchText])
 
   const handleDelete = async (id: string) => {
     try {
-      await logStorage.deleteLog(id)
-      message.success('日志已删除')
-      loadLogs()
+      const response = await fetch(`/api/logs?id=${id}`, { method: 'DELETE' })
+      const data = await response.json()
+      
+      if (data.success) {
+        message.success('日志已删除')
+        loadLogs()
+      } else {
+        message.error(data.error || '删除失败')
+      }
     } catch (error) {
       console.error('删除日志失败:', error)
       message.error('删除日志失败')
@@ -82,9 +109,16 @@ export default function LogManagement({ visible, onClose }: LogManagementProps) 
 
   const handleClearAll = async () => {
     try {
-      await logStorage.clearAll()
-      message.success('所有日志已清除')
-      loadLogs()
+      const response = await fetch('/api/logs?clearAll=true', { method: 'DELETE' })
+      const data = await response.json()
+      
+      if (data.success) {
+        message.success('所有日志已清除')
+        setLogs([])
+        setFilteredLogs([])
+      } else {
+        message.error(data.error || '清除失败')
+      }
     } catch (error) {
       console.error('清除日志失败:', error)
       message.error('清除日志失败')
@@ -92,19 +126,19 @@ export default function LogManagement({ visible, onClose }: LogManagementProps) 
   }
 
   const getStatusTag = (status: string) => {
-    const colors = {
+    const colors: Record<string, string> = {
       running: 'processing',
       success: 'success',
       error: 'error',
       aborted: 'warning',
     }
-    const labels = {
+    const labels: Record<string, string> = {
       running: '运行中',
       success: '成功',
       error: '失败',
       aborted: '已终止',
     }
-    return <Tag color={colors[status as keyof typeof colors]}>{labels[status as keyof typeof labels]}</Tag>
+    return <Tag color={colors[status] || 'default'}>{labels[status] || status}</Tag>
   }
 
   const columns = [
@@ -202,6 +236,13 @@ export default function LogManagement({ visible, onClose }: LogManagementProps) 
             placeholder={['开始日期', '结束日期']}
           />
           <Button
+            icon={<ReloadOutlined />}
+            onClick={loadLogs}
+            loading={loading}
+          >
+            刷新
+          </Button>
+          <Button
             icon={<ClearOutlined />}
             onClick={() => {
               setDateRange(null)
@@ -219,18 +260,19 @@ export default function LogManagement({ visible, onClose }: LogManagementProps) 
         </div>
 
         <Card size="small">
-          <Table
-            columns={columns}
-            dataSource={filteredLogs}
-            rowKey="id"
-            loading={loading}
-            pagination={{
-              pageSize: 10,
-              showTotal: (total) => `共 ${total} 条日志`,
-              showSizeChanger: true,
-            }}
-            locale={{ emptyText: <Empty description="暂无执行日志" /> }}
-          />
+          <Spin spinning={loading}>
+            <Table
+              columns={columns}
+              dataSource={filteredLogs}
+              rowKey="id"
+              pagination={{
+                pageSize: 10,
+                showTotal: (total) => `共 ${total} 条日志`,
+                showSizeChanger: true,
+              }}
+              locale={{ emptyText: <Empty description="暂无执行日志" /> }}
+            />
+          </Spin>
         </Card>
       </div>
 

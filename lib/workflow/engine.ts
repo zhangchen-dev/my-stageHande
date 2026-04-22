@@ -39,12 +39,14 @@ export class WorkflowEngine {
   }
 
   async initialize(): Promise<void> {
-    const apiKey = process.env.OPENAI_API_KEY || process.env.SILICONFLOW_API_KEY
-    const baseURL = process.env.OPENAI_BASE_URL || process.env.SILICONFLOW_BASE_URL
+    const apiKey = process.env.SILICONFLOW_API_KEY || process.env.OPENAI_API_KEY || ''
+    const baseURL = process.env.AI_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.siliconflow.cn/v1'
 
     if (!apiKey) {
-      throw new Error('未配置 API Key！请在 .env.local 中设置 SILICONFLOW_API_KEY 或 OPENAI_API_KEY')
+      throw new Error('未配置 API Key！请在 .env 中设置 SILICONFLOW_API_KEY 或 OPENAI_API_KEY')
     }
+
+    console.log(`[WorkflowEngine] API配置: baseURL=${baseURL}`)
 
     this.stagehand = new Stagehand({
       env: 'LOCAL',

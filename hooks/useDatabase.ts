@@ -366,9 +366,10 @@ export function useDatabase() {
         const newTask: TestTask = {
           id: generateId(),
           name: task.name || '未命名工作流',
-          type: 'workflow',
+          type: 'workflow' as const,
           description: task.description,
           workflowConfig: workflowConfig,
+          steps: [],
           status: 'draft',
           tags: task.tags,
           createdAt: timestamp,
@@ -405,12 +406,11 @@ export function useDatabase() {
       console.warn('[导入] 任务缺少必要数据，尝试修复:', task.name)
       
       if (task.name && (task.type === 'workflow' || !task.type)) {
-        // 尝试创建空的工作流任务
         const startNodeId = `node_${Date.now()}_import`
         const newTask: TestTask = {
           id: generateId(),
           name: task.name || '导入的任务',
-          type: 'workflow',
+          type: 'workflow' as const,
           description: task.description || '从文件导入',
           workflowConfig: {
             startNodeId: startNodeId,
@@ -423,6 +423,7 @@ export function useDatabase() {
               nextNodeId: '',
             }],
           },
+          steps: [],
           status: 'draft',
           createdAt: timestamp,
           updatedAt: timestamp,

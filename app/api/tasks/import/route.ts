@@ -8,11 +8,10 @@ import { TestStep, TestTask } from '@/types'
 
 export const dynamic = 'force-dynamic'
 
-// 生成唯一 ID
 function generateId(): string {
   return `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+}
 
-// POST - 导入任务（从 JSON 步骤数组）
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
@@ -25,7 +24,6 @@ export async function POST(request: NextRequest) {
       }, { status: 400 })
     }
 
-    // 验证每个步骤的基本结构
     for (let i = 0; i < steps.length; i++) {
       const step = steps[i] as TestStep
       if (!step.id || !step.type || !step.description) {

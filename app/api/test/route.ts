@@ -16,6 +16,7 @@ export async function POST(req: NextRequest) {
   const defaultStrategy: ExecutionStrategy = requestData.strategy || 'auto'
   const customScreenshotDir = requestData.screenshotOutputDir || undefined
   const testId: string = requestData.testId || `test_${Date.now()}`
+  const stepInterval: number = requestData.stepInterval || 10000
   
   if (customScreenshotDir) {
     try {
@@ -42,7 +43,7 @@ export async function POST(req: NextRequest) {
         const baseURL = process.env.AI_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.siliconflow.cn/v1'
 
         if (!apiKey) {
-          throw new Error('未配置 API Key！请在 .env.local 中设置 SILICONFLOW_API_KEY 或 OPENAI_API_KEY')
+          throw new Error('未配置 API Key！请在 .env 中设置 SILICONFLOW_API_KEY 或 OPENAI_API_KEY')
         }
 
         console.log(`[Stagehand] 初始化配置: baseURL=${baseURL}, apiKey=${apiKey.substring(0, 10)}...`)
@@ -90,7 +91,8 @@ export async function POST(req: NextRequest) {
             })
           },
           customScreenshotDir,
-          testId
+          testId,
+          stepInterval
         )
 
         if (isTaskAborted(testId)) {
@@ -121,8 +123,8 @@ export async function POST(req: NextRequest) {
             })
           }
 
-          const passedSteps = result.records.filter(r => r.status === 'success').length
-          const failedSteps = result.records.filter(r => r.status === 'failed').length
+          const passedSteps = result.records.filter((r: StepExecutionRecord) => r.status === 'success').length
+          const failedSteps = result.records.filter((r: StepExecutionRecord) => r.status === 'failed').length
           const totalDuration = Date.now() - startTime
 
           sendLog({

@@ -13,6 +13,7 @@ export interface WorkflowContext {
   variables: Map<string, any>
   iterationCount: Map<string, number>
   taskId?: string
+  stepInterval?: number
 }
 
 export interface WorkflowNode {
@@ -368,10 +369,14 @@ export class WorkflowEngine {
     }
 
     try {
-      // 非 goto 步骤等待页面稳定（优化：从8秒减少到3秒）
+      const stepInterval = this.context.stepInterval || 10000
+      this.onLog?.(`[等待] 步骤间隔 ${stepInterval / 1000} 秒...`)
+      
       if (step.type !== 'goto') {
-        await this.waitForDomSettle(3000)
+        await this.waitForDomSettle(5000)
       }
+
+      const settleStart = Date.now()
 
       switch (step.type) {
         case 'goto':
@@ -419,6 +424,13 @@ export class WorkflowEngine {
           break
         default:
           throw new Error(`不支持的步骤类型：${step.type}`)
+      }
+
+      const elapsed = Date.now() - settleStart
+      const remainingWait = stepInterval - elapsed
+      if (remainingWait > 0) {
+        this.onLog?.(`[等待] 额外等待 ${(remainingWait / 1000).toFixed(1)} 秒...`)
+        await new Promise(resolve => setTimeout(resolve, remainingWait))
       }
 
       record.endTime = new Date().toISOString()
@@ -770,9 +782,29 @@ export class WorkflowEngine {
    */
   private async executeInteraction(step: TestStep, record: StepExecutionRecord): Promise<void> {
     const { stagehand, page, strategy, taskId } = this.context
+    const stepStrategy = step.strategy || strategy
 
     if (taskId && isTaskAborted(taskId)) {
       throw new Error(`TASK_ABORTED: ${getAbortReason(taskId) || '用户终止'}`)
+    }
+
+    if (stepStrategy === 'selector' && step.selector) {
+      const selectorStr = this.buildSelectorString(step.selector)
+      if (selectorStr) {
+        this.onLog?.(`[交互] 使用选择器模式: ${selectorStr}`)
+        try {
+          const element = page.locator(selectorStr).first()
+          await element.click({ timeout: 10000 })
+          record.status = 'success'
+          record.selectorUsed = step.selector
+          await this.takeScreenshot(step, record, 'selector-success')
+          this.onLog?.(`[交互] ✅ 选择器点击成功`)
+          return
+        } catch (e) {
+          this.onLog?.(`[交互] 选择器点击失败: ${(e as Error).message}`)
+          throw new Error(`选择器点击失败: ${(e as Error).message}`)
+        }
+      }
     }
 
     const isLoopMode = step.loop === true
@@ -1034,7 +1066,8 @@ export async function executeWorkflow(
   strategy: ExecutionStrategy = 'auto',
   onLog?: (message: string) => void,
   customScreenshotDir?: string,
-  taskId?: string
+  taskId?: string,
+  stepInterval?: number
 ): Promise<{
   success: boolean
   records: StepExecutionRecord[]
@@ -1049,7 +1082,8 @@ export async function executeWorkflow(
     screenshotDir: customScreenshotDir || PATHS.SCREENSHOTS,
     variables: new Map(),
     iterationCount: new Map(),
-    taskId
+    taskId,
+    stepInterval
   }
 
   const engine = new WorkflowEngine(context, onLog)

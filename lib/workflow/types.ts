@@ -11,6 +11,7 @@ export enum OperationType {
   HOVER = 'HOVER',
   SCREENSHOT = 'SCREENSHOT',
   AI_TASK = 'AI_TASK',
+  WAIT = 'WAIT',
 }
 
 export enum ExecuteStrategy {

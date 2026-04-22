@@ -1,134 +1,145 @@
-export interface WorkflowNodeConfig {
-  id: string
-  type: string
-  strategy?: string
-  params?: any
-  nextNodeId?: string
-  conditionTrueNodeId?: string
-  conditionFalseNodeId?: string
-}
+import { OperationType, ExecuteStrategy, WorkflowConfig, WorkflowNode } from '@/lib/workflow/types'
+import { TestStep, ExecutionStrategy } from '@/types'
 
-export interface WorkflowConfig {
-  startNodeId: string
-  nodes: WorkflowNodeConfig[]
-}
-
-export function convertWorkflowConfigToSteps(workflowConfig: WorkflowConfig): any[] {
-  const steps: any[] = []
-
-  if (!workflowConfig.nodes || workflowConfig.nodes.length === 0) {
-    console.warn('[convertWorkflowConfigToSteps] 工作流配置为空')
-    return steps
+export function convertWorkflowConfigToSteps(config: WorkflowConfig): TestStep[] {
+  if (!config || !config.nodes || config.nodes.length === 0) {
+    return []
   }
 
-  // 确保 startNodeId 有效
-  let currentNodeId = workflowConfig.startNodeId
-  if (!currentNodeId || !workflowConfig.nodes.find(n => n.id === currentNodeId)) {
-    currentNodeId = workflowConfig.nodes[0].id
-    console.log('[convertWorkflowConfigToSteps] 使用第一个节点作为起始节点:', currentNodeId)
-  }
+  const steps: TestStep[] = []
+  let currentId = config.startNodeId
+  const visited = new Set<string>()
+  const nodeIdToStepId = new Map<string, string>()
 
-  const nodeMap = new Map(workflowConfig.nodes.map((n) => [n.id, n]))
-  const visitedNodes = new Set<string>()
+  while (currentId && !visited.has(currentId)) {
+    visited.add(currentId)
+    const node = config.nodes.find(n => n.id === currentId)
+    if (!node) break
 
-  while (currentNodeId && !visitedNodes.has(currentNodeId)) {
-    visitedNodes.add(currentNodeId)
-    const node = nodeMap.get(currentNodeId)
-    if (!node) {
-      console.warn(`[convertWorkflowConfigToSteps] 未找到节点: ${currentNodeId}`)
+    const stepId = `step_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+    nodeIdToStepId.set(node.id, stepId)
+
+    const step = convertNodeToStep(node, stepId)
+    steps.push(step)
+
+    if (node.type === OperationType.CONDITION) {
       break
     }
-    
-    let stepType = 'script'
-    let stepData: any = {}
-    let description = ''
-    
-    switch (node.type) {
-      case 'OPEN_PAGE':
-        stepType = 'goto'
-        stepData = { value: node.params?.url || '' }
-        description = `打开页面 ${node.params?.url || '（未指定URL）'}`
-        break
-      case 'CLICK':
-        stepType = 'click'
-        stepData = {
-          selector: node.params?.selector ? { css: node.params.selector } : undefined,
-          description: node.params?.aiDescription || undefined,
-        }
-        description = `点击元素${node.params?.aiDescription ? `: ${node.params.aiDescription}` : ''}${node.params?.selector ? ` (${node.params.selector})` : ''}`
-        break
-      case 'FORM_FILL':
-        stepType = 'fill'
-        stepData = { fields: node.params?.fields || [] }
-        description = `填写表单 (${node.params?.fields?.length || 0} 个字段)`
-        break
-      case 'SCROLL':
-        stepType = 'scroll'
-        stepData = { direction: node.params?.direction || 'down', amount: node.params?.amount || 500 }
-        description = `滚动页面 (${node.params?.direction || 'down'} ${node.params?.amount || 500}px)`
-        break
-      case 'HOVER':
-        stepType = 'hover'
-        stepData = {
-          selector: node.params?.selector ? { css: node.params.selector } : undefined,
-          description: node.params?.aiDescription || undefined,
-        }
-        description = `悬停元素${node.params?.aiDescription ? `: ${node.params.aiDescription}` : ''}${node.params?.selector ? ` (${node.params.selector})` : ''}`
-        break
-      case 'SCRIPT_EXEC':
-        stepType = 'script'
-        stepData = { script: node.params?.script || '' }
-        description = `执行脚本`
-        break
-      case 'CONDITION':
-        stepType = 'condition'
-        stepData = {
-          checkType: node.params?.checkType,
-          selector: node.params?.selector,
-          value: node.params?.value,
-          varName: node.params?.varName,
-          conditionTrueNodeId: node.conditionTrueNodeId,
-          conditionFalseNodeId: node.conditionFalseNodeId,
-        }
-        description = `条件判断: ${node.params?.checkType || '未知条件'}`
-        break
-      case 'SCREENSHOT':
-        stepType = 'screenshot'
-        stepData = {
-          filename: node.params?.filename || `screenshot-${Date.now()}.png`,
-          screenshotType: node.params?.screenshotType || 'fullpage',
-          selector: node.params?.selector,
-        }
-        description = `页面截取`
-        break
-      case 'AI_TASK':
-        stepType = 'ai_task'
-        stepData = {
-          taskDescription: node.params?.taskDescription || '',
-          timeout: node.params?.timeout || 60,
-        }
-        description = `AI任务: ${node.params?.taskDescription || '未指定任务'}`
-        break
-      default:
-        stepType = 'script'
-        stepData = { script: `// Unknown node type: ${node.type}` }
-        description = `未知类型: ${node.type}`
-    }
-    
-    steps.push({
-      id: node.id,  // 添加节点ID用于追踪
-      type: stepType,
-      ...stepData,
-      strategy: node.strategy?.toLowerCase() || 'auto',
-      description,  // ✅ 添加描述信息
-    })
-    
-    if (node.type === 'CONDITION') {
-      currentNodeId = ''
-    } else {
-      currentNodeId = node.nextNodeId || ''
-    }
+
+    currentId = node.nextNodeId || ''
   }
-  
+
   return steps
+}
+
+function convertNodeToStep(node: WorkflowNode, stepId: string): TestStep {
+  const baseStep: TestStep = {
+    id: stepId,
+    type: 'click',
+    description: node.name,
+    strategy: (node.strategy?.toLowerCase() || 'auto') as ExecutionStrategy,
+  }
+
+  switch (node.type) {
+    case OperationType.OPEN_PAGE:
+      return {
+        ...baseStep,
+        type: 'goto',
+        value: node.params?.url || '',
+        description: node.name || '打开页面',
+      }
+
+    case OperationType.CLICK:
+      return {
+        ...baseStep,
+        type: 'click',
+        description: node.name || `点击元素${node.params?.aiDescription ? `: ${node.params.aiDescription}` : ''}${node.params?.selector ? ` (${node.params.selector})` : ''}`,
+        selector: node.params?.selector ? { css: node.params.selector } : undefined,
+        loop: node.params?.loop || false,
+        maxLoopIterations: node.params?.maxLoopIterations || 10,
+      }
+
+    case OperationType.FORM_FILL:
+      return {
+        ...baseStep,
+        type: 'fill',
+        description: node.name || '填写表单',
+        fields: node.params?.fields || [],
+        value: node.params?.value || '',
+      }
+
+    case OperationType.SCROLL:
+      return {
+        ...baseStep,
+        type: 'scroll',
+        description: node.name || '滚动页面',
+        value: node.params?.direction || 'down',
+      }
+
+    case OperationType.HOVER:
+      return {
+        ...baseStep,
+        type: 'hover',
+        description: node.name || '悬停元素',
+        selector: node.params?.selector ? { css: node.params.selector } : undefined,
+      }
+
+    case OperationType.WAIT:
+      return {
+        ...baseStep,
+        type: 'wait',
+        description: node.name || '等待',
+        value: String(node.params?.duration || 3000),
+      }
+
+    case OperationType.SCREENSHOT:
+      return {
+        ...baseStep,
+        type: 'screenshot',
+        description: node.name || '截图',
+        value: node.params?.filename || `screenshot-${Date.now()}.png`,
+      }
+
+    case OperationType.SCRIPT_EXEC:
+      if (node.params?.selector) {
+        return {
+          ...baseStep,
+          type: 'js',
+          description: node.name || '执行脚本',
+          value: node.params?.script || '',
+          selector: { css: node.params.selector },
+          strategy: 'selector',
+        }
+      }
+      return {
+        ...baseStep,
+        type: 'js',
+        description: node.name || '执行脚本',
+        value: node.params?.script || '',
+      }
+
+    case OperationType.AI_TASK:
+      return {
+        ...baseStep,
+        type: 'click',
+        description: node.name || 'AI 任务',
+        strategy: 'ai',
+      }
+
+    case OperationType.CONDITION:
+      return {
+        ...baseStep,
+        type: 'condition',
+        description: node.name || '条件判断',
+        condition: node.params?.condition || 'EXIST',
+        value: node.params?.value || '',
+      }
+
+    default:
+      return {
+        ...baseStep,
+        type: 'click',
+        description: node.name || '未知操作',
+      }
+  }
 }

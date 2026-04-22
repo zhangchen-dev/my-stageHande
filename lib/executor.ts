@@ -13,12 +13,13 @@ export async function executeTest(
   strategy: ExecutionStrategy = 'auto',
   onLog?: (message: string) => void,
   customScreenshotDir?: string,
-  taskId?: string
+  taskId?: string,
+  stepInterval?: number
 ): Promise<{
   success: boolean
   records: StepExecutionRecord[]
   error?: string
   aborted?: boolean
 }> {
-  return executeWorkflow(stagehand, page, steps, testId, strategy, onLog, customScreenshotDir, taskId)
+  return executeWorkflow(stagehand, page, steps, testId, strategy, onLog, customScreenshotDir, taskId, stepInterval)
 }

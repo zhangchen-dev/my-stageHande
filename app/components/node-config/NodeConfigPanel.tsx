@@ -19,6 +19,7 @@ const getTypeLabel = (type: OperationType): string => {
     [OperationType.HOVER]: '悬停元素',
     [OperationType.SCREENSHOT]: '页面截取',
     [OperationType.AI_TASK]: 'AI任务',
+    [OperationType.WAIT]: '等待',
   }
   return labels[type] || type
 }
@@ -60,6 +61,7 @@ export default function NodeConfigPanel({
       [OperationType.NODE_SELECT]: '选择节点',
       [OperationType.SCREENSHOT]: '页面截取',
       [OperationType.AI_TASK]: 'AI任务',
+      [OperationType.WAIT]: '等待',
     }
     
     const nodeIndex = getNodeIndex(n.id)

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
-import { Layout, Button, Space, Card, Typography, Tag, message, Modal, Tooltip, Spin, Alert, Badge, Form, Input, Dropdown } from 'antd'
+import { Layout, Button, Space, Card, Typography, Tag, message, Modal, Tooltip, Spin, Alert, Badge, Form, Input, Dropdown, InputNumber } from 'antd'
 import {
   SaveOutlined,
   ArrowLeftOutlined,
@@ -39,6 +39,7 @@ export default function WorkflowEditor() {
   const [taskName, setTaskName] = useState('未命名工作流')
   const [taskForm] = Form.useForm()
   const [lastSelectedType, setLastSelectedType] = useState<OperationType | null>(null)
+  const [stepInterval, setStepInterval] = useState(10)
 
   useEffect(() => {
     if (taskId) {
@@ -78,7 +79,6 @@ export default function WorkflowEditor() {
         if (taskData && taskData.workflowConfig) {
           let workflowConfig = taskData.workflowConfig
 
-          // 确保 startNodeId 有效
           if (!workflowConfig.startNodeId || !workflowConfig.nodes?.find((n: WorkflowNode) => n.id === workflowConfig.startNodeId)) {
             workflowConfig = {
               ...workflowConfig,
@@ -90,11 +90,13 @@ export default function WorkflowEditor() {
           setConfig(workflowConfig)
           setOriginalConfig(workflowConfig)
           setTaskName(taskData.name || '未命名工作流')
+          setStepInterval(taskData.stepInterval ? Math.round(taskData.stepInterval / 1000) : 10)
         } else if (taskData && taskData.steps) {
           const convertedConfig = convertLegacyStepsToWorkflow(taskData.steps)
           setConfig(convertedConfig)
           setOriginalConfig(convertedConfig)
           setTaskName(taskData.name || '未命名工作流')
+          setStepInterval(taskData.stepInterval ? Math.round(taskData.stepInterval / 1000) : 10)
         } else {
           message.error('任务数据不存在或格式错误')
           router.push('/')
@@ -147,36 +149,63 @@ export default function WorkflowEditor() {
       const nodeId = `node_${nodeIdCounter++}`
       
       let nodeType: OperationType
+      let params: Record<string, any> = {}
+      
       switch (step.type) {
         case 'goto':
           nodeType = OperationType.OPEN_PAGE
+          params = { url: step.value || '' }
           break
         case 'click':
           nodeType = OperationType.CLICK
+          params = {
+            selector: step.selector?.css || step.selector?.classPrefix ? `[class*="${step.selector.classPrefix}"]` : step.selector?.css || '',
+            aiDescription: step.description || '',
+            loop: step.loop || false,
+            maxLoopIterations: step.maxLoopIterations || 10,
+          }
           break
         case 'fill':
           nodeType = OperationType.FORM_FILL
+          params = { fields: step.fields || [], value: step.value || '' }
           break
         case 'scroll':
           nodeType = OperationType.SCROLL
+          params = { direction: step.value || 'down', amount: 500 }
           break
         case 'hover':
           nodeType = OperationType.HOVER
+          params = {
+            selector: step.selector?.css || '',
+            aiDescription: step.description || '',
+          }
+          break
+        case 'wait':
+          nodeType = OperationType.WAIT
+          params = { duration: parseInt(step.value || '3000', 10) }
+          break
+        case 'screenshot':
+          nodeType = OperationType.SCREENSHOT
+          params = { filename: step.value || `screenshot-${Date.now()}.png` }
+          break
+        case 'js':
+          nodeType = OperationType.SCRIPT_EXEC
+          params = {
+            script: step.value || '',
+            selector: step.selector?.classPrefix ? `[class*="${step.selector.classPrefix}"]` : step.selector?.css || '',
+          }
           break
         default:
           nodeType = OperationType.SCRIPT_EXEC
+          params = { script: step.value || '' }
       }
 
       const node: WorkflowNode = {
         id: nodeId,
-        name: `${getTypeLabel(nodeType)} #${nodeIdCounter - 1}`,
+        name: step.description || `${getTypeLabel(nodeType)} #${nodeIdCounter - 1}`,
         type: nodeType,
         strategy: (step.strategy?.toUpperCase() as ExecuteStrategy) || ExecuteStrategy.AUTO,
-        params: {
-          ...(step.selector ? { selector: step.selector.css || step.selector.id } : {}),
-          ...(step.value ? { value: step.value } : {}),
-          ...(step.description ? { description: step.description } : {}),
-        },
+        params,
         nextNodeId: index < steps.length - 1 ? `node_${nodeIdCounter}` : '',
       }
 
@@ -202,15 +231,17 @@ export default function WorkflowEditor() {
     try {
       const workflowId = taskId || `workflow_${Date.now()}`
 
-      // 在保存前自动连接未指定 nextNodeId 的节点
-      const connectedNodes = autoConnectNodes(config.nodes)
+      const cleanedConfig = removeIsolatedNodes(config)
 
-      // 确保 startNodeId 有效
-      let validStartNodeId = config.startNodeId
+      const connectedNodes = autoConnectNodes(cleanedConfig.nodes)
+
+      let validStartNodeId = cleanedConfig.startNodeId
       if (!validStartNodeId || !connectedNodes.find(n => n.id === validStartNodeId)) {
         validStartNodeId = connectedNodes[0]?.id || ''
-        console.log('[saveWorkflow] 自动修正 startNodeId:', { old: config.startNodeId, new: validStartNodeId })
+        console.log('[saveWorkflow] 自动修正 startNodeId:', { old: cleanedConfig.startNodeId, new: validStartNodeId })
       }
+
+      const isolatedCount = config.nodes.length - cleanedConfig.nodes.length
 
       const taskData = {
         id: workflowId,
@@ -220,6 +251,7 @@ export default function WorkflowEditor() {
           startNodeId: validStartNodeId,
           nodes: connectedNodes,
         },
+        stepInterval: stepInterval * 1000,
         status: 'draft',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -230,7 +262,8 @@ export default function WorkflowEditor() {
         name: taskName,
         startNodeId: validStartNodeId,
         nodesCount: connectedNodes.length,
-        autoConnectedNodes: connectedNodes.filter(n => n.nextNodeId).length
+        autoConnectedNodes: connectedNodes.filter(n => n.nextNodeId).length,
+        isolatedNodesRemoved: isolatedCount
       })
 
       const db = await openDB()
@@ -238,7 +271,6 @@ export default function WorkflowEditor() {
       const request = store.put(taskData)
 
       request.onsuccess = () => {
-        // 更新本地状态为已连接的配置
         const savedConfig = {
           startNodeId: validStartNodeId,
           nodes: connectedNodes,
@@ -248,8 +280,12 @@ export default function WorkflowEditor() {
         setHasUnsavedChanges(false)
         setIsSaved(true)
         
+        const saveMessage = isolatedCount > 0 
+          ? `✓ 工作流已保存 (${connectedNodes.length} 节点, 已清理 ${isolatedCount} 个孤立节点)`
+          : `✓ 工作流已保存 (${connectedNodes.length} 节点, ${connectedNodes.filter(n => n.nextNodeId).length} 个连接)`
+        
         message.success({
-          content: `✓ 工作流已保存 (${connectedNodes.length} 节点, ${connectedNodes.filter(n => n.nextNodeId).length} 个连接)`,
+          content: saveMessage,
           icon: <CheckCircleOutlined style={{ color: '#52c41a' }} />,
         })
 
@@ -446,8 +482,6 @@ export default function WorkflowEditor() {
     const connectedNodes = nodes.map((node, index) => {
       const updatedNode = { ...node }
 
-      // 只有非条件节点才自动连接到顺序上的下一个节点
-      // 条件节点应该只使用 conditionTrueNodeId 和 conditionFalseNodeId
       if (!updatedNode.nextNodeId && index < nodes.length - 1 && updatedNode.type !== OperationType.CONDITION) {
         updatedNode.nextNodeId = nodes[index + 1].id
       }
@@ -461,6 +495,41 @@ export default function WorkflowEditor() {
     })
 
     return connectedNodes
+  }
+
+  const removeIsolatedNodes = (config: WorkflowConfig): WorkflowConfig => {
+    if (!config.nodes || config.nodes.length === 0) {
+      return config
+    }
+
+    const connectedNodes = new Set<string>()
+    
+    const collectConnected = (nodeId: string) => {
+      if (connectedNodes.has(nodeId)) return
+      const node = config.nodes.find(n => n.id === nodeId)
+      if (!node) return
+      
+      connectedNodes.add(nodeId)
+      if (node.nextNodeId) collectConnected(node.nextNodeId)
+      if (node.conditionTrueNodeId) collectConnected(node.conditionTrueNodeId)
+      if (node.conditionFalseNodeId) collectConnected(node.conditionFalseNodeId)
+    }
+    
+    if (config.startNodeId) {
+      collectConnected(config.startNodeId)
+    }
+    
+    const validNodes = config.nodes.filter(n => connectedNodes.has(n.id))
+    
+    const removedCount = config.nodes.length - validNodes.length
+    if (removedCount > 0) {
+      console.log(`[removeIsolatedNodes] 已清理 ${removedCount} 个孤立节点`)
+    }
+    
+    return {
+      ...config,
+      nodes: validNodes,
+    }
   }
 
   // 获取有效节点数量（过滤无效数据）
@@ -485,54 +554,18 @@ export default function WorkflowEditor() {
     }
   }
 
-  const handleExecute = () => {
-    if (hasUnsavedChanges) {
-      Modal.confirm({
-        title: '执行前保存',
-        icon: <WarningOutlined style={{ color: '#faad14' }} />,
-        content: '您有未保存的更改。建议先保存再执行。',
-        okText: '保存并执行',
-        cancelText: '直接执行',
-        onOk: async () => {
-          await saveWorkflow()
-          executeWorkflow()
-        },
-        onCancel: () => {
-          executeWorkflow()
-        },
-      })
-    } else {
-      executeWorkflow()
-    }
-  }
-
-  const executeWorkflow = () => {
+  const handleSaveAndGoToRun = async () => {
     if (config.nodes.length === 0) {
       message.warning('请先添加节点')
       return
     }
 
-    if (!taskId) {
-      Modal.warning({
-        title: '请先保存工作流',
-        content: '执行前请先保存工作流配置',
-      })
-      return
+    if (hasUnsavedChanges) {
+      await saveWorkflow()
     }
-
-    const params = new URLSearchParams()
-    params.set('run', taskId)
     
-    try {
-      params.set('workflowConfig', JSON.stringify(config))
-      console.log('[executeWorkflow] 执行工作流:', { 
-        taskId, 
-        nodesCount: config.nodes.length,
-        startNodeId: config.startNodeId 
-      })
-    } catch (e) {
-      console.warn('[executeWorkflow] 序列化配置失败，将从数据库读取', e)
-    }
+    message.success('工作流已保存，请在任务列表中执行')
+    router.push('/')
   }
 
   if (isLoading) {
@@ -574,6 +607,18 @@ export default function WorkflowEditor() {
         </Space>
 
         <Space>
+          <Space style={{ background: 'rgba(255,255,255,0.1)', padding: '4px 12px', borderRadius: 4 }}>
+            <span style={{ color: 'rgba(255,255,255,0.85)', fontSize: 13 }}>步骤间隔</span>
+            <InputNumber
+              min={1}
+              max={60}
+              value={stepInterval}
+              onChange={(v) => { setStepInterval(v || 10); setHasUnsavedChanges(true) }}
+              style={{ width: 60 }}
+              size="small"
+              addonAfter="秒"
+            />
+          </Space>
           <Tooltip title="编辑名称">
             <Button
               type="text"
@@ -586,17 +631,16 @@ export default function WorkflowEditor() {
             icon={<SaveOutlined />}
             onClick={saveWorkflow}
             loading={isSaving}
-            type="primary"
           >
             保存工作流
           </Button>
           <Button
             type="primary"
             icon={<PlayCircleOutlined />}
-            onClick={handleExecute}
+            onClick={handleSaveAndGoToRun}
             disabled={config.nodes.length === 0}
           >
-            执行工作流
+            保存并执行
           </Button>
         </Space>
       </Header>
@@ -760,6 +804,7 @@ function getTypeLabel(type: OperationType): string {
     [OperationType.HOVER]: '悬停元素',
     [OperationType.SCREENSHOT]: '页面截取',
     [OperationType.AI_TASK]: 'AI任务',
+    [OperationType.WAIT]: '等待',
   }
   return labels[type] || type
 }

@@ -64,47 +64,21 @@ export interface GuideBubbleInfo {
 export interface TestStep {
   id: string
   type: TestStepType
-  description: string // 操作描述（AI 识别的核心依据）
-  value?: string      // URL / 输入内容
-  selector?: ElementSelector // 元素选择器（精确匹配优先）
-  strategy?: ExecutionStrategy // 执行策略
-  /** followGuide 特有：最大等待气泡出现的时间(ms) */
+  description: string
+  value?: string
+  selector?: ElementSelector
+  strategy?: ExecutionStrategy
   maxWaitTime?: number
-  /** followGuide 特有：是否在无气泡时尝试唤起引导 */
   tryActivateGuide?: boolean
-  /**
-   * followGuide 循环模式：设为 true 时自动循环检测并点击指引气泡
-   * 直到页面没有气泡或达到 maxLoopIterations 次数为止
-   * 适合步骤不确定但操作模式相同的引导流程
-   */
   loop?: boolean
-  /** followGuide 循环模式：最大循环次数（默认50，防止死循环） */
   maxLoopIterations?: number
-  /**
-   * condition 条件判断步骤：
-   * 本步骤执行成功后，执行 thenSteps 中的步骤
-   * 执行失败后，执行后续步骤
-   */
   thenSteps?: TestStep[]
-  /**
-   * conditionLoop 条件循环步骤：
-   * conditionStep 执行成功后，执行 loopSteps 中的步骤，然后回到 conditionStep 重新判断
-   * conditionStep 执行失败或超过 maxIterations 次后，执行后续步骤
-   */
   loopSteps?: TestStep[]
-  /** conditionLoop 特有：最大循环次数（默认10，防止死循环） */
   maxIterations?: number
-  /**
-   * conditionLoop 特有：循环条件步骤
-   * 这是一个完整的步骤配置，可以是任何类型（click、fill、condition等）
-   * 执行成功 = 条件满足，执行失败 = 条件不满足
-   */
   conditionStep?: TestStep
-  /**
-   * gotoStep 节点选择特有：
-   * 要跳转到的目标步骤 ID，执行时会跳转到该步骤继续执行
-   */
   targetStepId?: string
+  fields?: Array<{ selector: string; value: string }>
+  condition?: string
 }
 
 // ==================== 测试任务 ====================
@@ -119,7 +93,10 @@ export interface TestTask {
   status: TaskStatus
   createdAt: string
   updatedAt: string
-  tags?: string[] // 标签分类
+  tags?: string[]
+  type?: 'workflow' | 'task'
+  workflowConfig?: any
+  stepInterval?: number
 }
 
 // ==================== 执行记录 ====================

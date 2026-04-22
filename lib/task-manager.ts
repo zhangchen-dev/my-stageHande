@@ -36,16 +36,28 @@ async function forceCloseBrowser(testId: string): Promise<void> {
   const task = runningTasks.get(testId)
   if (!task || !task.stagehand || task.closePromise) return
   
-  console.log(`[TaskManager] 正在关闭浏览器: ${testId}`)
+  console.log(`[TaskManager] 正在强制关闭浏览器: ${testId}`)
   
   task.closePromise = (async () => {
     try {
-      if (task.stagehand && typeof task.stagehand.close === 'function') {
-        await Promise.race([
-          task.stagehand.close(),
-          new Promise((resolve) => setTimeout(resolve, 5000))
-        ])
-        console.log(`[TaskManager] 浏览器已关闭: ${testId}`)
+      if (task.stagehand) {
+        const context = task.stagehand.context
+        if (context) {
+          console.log(`[TaskManager] 尝试关闭浏览器上下文`)
+          await Promise.race([
+            context.close(),
+            new Promise((resolve) => setTimeout(resolve, 3000))
+          ])
+          console.log(`[TaskManager] 浏览器上下文已关闭: ${testId}`)
+        }
+        
+        if (typeof task.stagehand.close === 'function') {
+          await Promise.race([
+            task.stagehand.close(),
+            new Promise((resolve) => setTimeout(resolve, 2000))
+          ])
+          console.log(`[TaskManager] Stagehand 已关闭: ${testId}`)
+        }
       }
     } catch (e) {
       console.error(`[TaskManager] 关闭浏览器失败: ${testId}`, e)
@@ -53,10 +65,16 @@ async function forceCloseBrowser(testId: string): Promise<void> {
       try {
         const context = task.stagehand?.context
         if (context) {
+          const pages = context.pages()
+          for (const page of pages) {
+            try {
+              await page.close().catch(() => {})
+            } catch {}
+          }
           await context.close().catch(() => {})
         }
       } catch (e2) {
-        console.error(`[TaskManager] 强制关闭上下文失败`, e2)
+        console.error(`[TaskManager] 强制关闭失败`, e2)
       }
     }
   })()
