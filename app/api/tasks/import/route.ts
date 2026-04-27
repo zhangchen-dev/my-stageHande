@@ -1,6 +1,18 @@
 /**
- * 导入任务 API
- * 支持直接导入 JSON 格式的测试步骤，自动创建任务
+ * @file route.ts
+ * @description 导入任务 API - 支持导入 JSON 格式的测试步骤并自动创建任务
+ * @module 任务管理 API / 导入功能
+ * 
+ * 路由：
+ * - POST /api/tasks/import  导入 JSON 格式的测试任务
+ * 
+ * 请求体格式：
+ * {
+ *   "steps": [...],        // 必填：测试步骤数组
+ *   "name": "任务名称",    // 可选：任务名称（默认"导入的任务"）
+ *   "description": "...",  // 可选：任务描述
+ *   "autoRun": false       // 可选：是否自动执行
+ * }
  */
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -30,43 +42,38 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({
           error: `步骤 ${i + 1} 缺少必要字段 (id, type, description)`,
           stepIndex: i,
-          step
+          stepData: step
         }, { status: 400 })
       }
     }
 
-    const now = new Date().toISOString()
-    const taskName = name || `导入任务_${now.replace(/[:.]/g, '-')}`
-    const taskId = generateId()
-
-    const task: TestTask = {
-      id: taskId,
+    const taskName = name || `导入的任务_${new Date().toLocaleString()}`
+    
+    const newTask: TestTask = {
+      id: generateId(),
       name: taskName,
       description: description || `从 JSON 导入，包含 ${steps.length} 个步骤`,
-      steps: steps as TestStep[],
-      status: 'ready',
-      createdAt: now,
-      updatedAt: now,
-      tags: ['导入', '自动创建'],
+      steps: steps,
+      status: autoRun ? 'ready' : 'draft',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      tags: ['imported', 'json']
     }
 
-    console.log(`[导入] 成功创建任务: ${taskName}`)
-    console.log(`[导入] 任务ID: ${taskId}`)
-    console.log(`[导入] 步骤数: ${steps.length}`)
+    console.log(`[ImportAPI] 导入任务: ${taskName}, 步骤数: ${steps.length}`)
 
     return NextResponse.json({
       success: true,
-      task,
-      autoRun: autoRun === true,
+      task: newTask,
       message: `成功导入任务 "${taskName}"，共 ${steps.length} 个步骤`
     }, { status: 201 })
 
   } catch (error) {
-    console.error('[导入] 解析失败:', error)
+    console.error('[ImportAPI] 导入失败:', error)
     return NextResponse.json({
-      error: 'JSON 解析失败',
+      error: '导入任务失败',
       details: (error as Error).message,
-      hint: '请确保上传的是有效的 JSON 文件'
-    }, { status: 400 })
+      hint: '请检查 JSON 格式是否正确'
+    }, { status: 500 })
   }
 }

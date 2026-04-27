@@ -1,7 +1,15 @@
 /**
- * 初始化预设任务到 IndexDB
- * POST /api/tasks/init
- * 将预设任务文件导入到用户的 IndexDB 中
+ * @file route.ts
+ * @description 初始化预设任务 API - 将预设任务文件导入到用户的 IndexedDB 中
+ * @module 任务管理 API / 预设任务初始化
+ * 
+ * 路由：
+ * - POST /api/tasks/init  初始化预设任务到数据库
+ * 
+ * 功能：
+ * - 从 public/preset-tasks/ 目录读取预配置的测试任务
+ * - 支持多版本预设任务（按优先级自动选择最新版本）
+ * - 返回导入的任务列表供前端保存到 IndexedDB
  */
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -35,78 +43,82 @@ function getAvailablePresetPath(): string | null {
 
 export async function POST(request: NextRequest) {
   try {
-    // 查找可用的预设任务文件
     const presetPath = getAvailablePresetPath()
     
     if (!presetPath) {
-      return NextResponse.json({ 
-        error: '预设任务文件不存在',
-        availableFiles: PRESET_FILES,
+      return NextResponse.json({
+        error: '未找到预设任务文件',
+        hint: '请在 public/preset-tasks/ 目录下添加预设任务 JSON 文件',
+        expectedFiles: PRESET_FILES
       }, { status: 404 })
     }
 
-    const fileContent = fs.readFileSync(presetPath, 'utf-8')
-    const presetTasks = JSON.parse(fileContent)
+    console.log(`[InitAPI] 使用预设任务文件: ${path.basename(presetPath)}`)
 
-    if (!Array.isArray(presetTasks) || presetTasks.length === 0) {
-      return NextResponse.json({ error: '预设任务数据格式错误' }, { status: 400 })
+    const fileContent = fs.readFileSync(presetPath, 'utf-8')
+    let presetTasks: any[]
+
+    try {
+      const parsed = JSON.parse(fileContent)
+      presetTasks = Array.isArray(parsed) ? parsed : [parsed]
+    } catch (parseError) {
+      console.error('[InitAPI] JSON 解析失败:', parseError)
+      return NextResponse.json({
+        error: '预设任务文件格式错误',
+        details: (parseError as Error).message,
+        file: presetPath
+      }, { status: 500 })
     }
 
-    // 返回预设任务数据供前端导入
+    // 为每个预设任务生成唯一 ID 和时间戳
+    const tasksWithIds = presetTasks.map((task, index) => ({
+      ...task,
+      id: task.id || `preset_${Date.now()}_${index}`,
+      status: 'draft',
+      createdAt: task.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      tags: [...(task.tags || []), 'preset', 'demo']
+    }))
+
+    console.log(`[InitAPI] 成功加载 ${tasksWithIds.length} 个预设任务`)
+
     return NextResponse.json({
       success: true,
-      tasks: presetTasks,
-      count: presetTasks.length,
+      tasks: tasksWithIds,
       sourceFile: path.basename(presetPath),
-      message: `成功读取 ${presetTasks.length} 个预设任务 (来源: ${path.basename(presetPath)})`,
+      message: `成功加载 ${tasksWithIds.length} 个预设任务`
     })
 
   } catch (error) {
-    console.error('初始化预设任务失败:', error)
+    console.error('[InitAPI] 初始化失败:', error)
     return NextResponse.json({
-      error: '初始化失败',
-      details: (error as Error).message,
+      error: '初始化预设任务失败',
+      details: (error as Error).message
     }, { status: 500 })
   }
 }
 
-// GET - 获取预设任务列表（不导入）
+// GET - 获取可用的预设任务列表（不导入，仅查看）
 export async function GET() {
   try {
-    const presetPath = getAvailablePresetPath()
+    const availableFiles: string[] = []
     
-    if (!presetPath) {
-      return NextResponse.json({ 
-        error: '预设任务文件不存在',
-        available: false,
-        availableFiles: PRESET_FILES,
-      }, { status: 404 })
+    for (const filename of PRESET_FILES) {
+      const filePath = path.join(PRESET_TASKS_DIR, filename)
+      if (fs.existsSync(filePath)) {
+        availableFiles.push(filename)
+      }
     }
 
-    const fileContent = fs.readFileSync(presetPath, 'utf-8')
-    const presetTasks = JSON.parse(fileContent)
-
-    // 只返回任务摘要信息，不返回完整步骤
-    const taskSummaries = Array.isArray(presetTasks) ? presetTasks.map(task => ({
-      id: task.id,
-      name: task.name,
-      description: task.description,
-      tags: task.tags || [],
-      stepCount: task.steps?.length || 0,
-      status: task.status || 'draft',
-    })) : []
-
     return NextResponse.json({
-      available: true,
-      sourceFile: path.basename(presetPath),
-      count: taskSummaries.length,
-      tasks: taskSummaries,
+      availableFiles,
+      totalFiles: availableFiles.length,
+      directory: PRESET_TASKS_DIR
     })
-
   } catch (error) {
     return NextResponse.json({
       error: '获取预设任务列表失败',
-      details: (error as Error).message,
+      details: (error as Error).message
     }, { status: 500 })
   }
 }

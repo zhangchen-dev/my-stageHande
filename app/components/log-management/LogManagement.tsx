@@ -1,51 +1,54 @@
+/**
+ * @file LogManagement.tsx
+ * @description 日志管理组件 - 提供执行日志的查看、搜索、筛选和删除功能
+ * @module 日志管理
+ * 
+ * 功能：
+ * - 日志列表展示（CRUD）
+ * - 时间范围筛选
+ * - 任务名称搜索
+ * - 状态筛选（成功、失败、运行中、已终止）
+ * - 任务ID筛选
+ * - 日志详情查看
+ * - 删除单条日志
+ * - 清空所有日志
+ */
+
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Card, Table, Button, Space, DatePicker, Modal, Typography, Tag, Empty, message, Input, Popconfirm, Spin } from 'antd'
+import { Card, Table, Button, Space, DatePicker, Modal, Typography, Tag, Empty, message, Input, Popconfirm, Spin, Select } from 'antd'
 import { DeleteOutlined, EyeOutlined, SearchOutlined, ClearOutlined, ReloadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
+import { ExecutionLog } from '@/types'
 
 const { Text, Paragraph } = Typography
 const { RangePicker } = DatePicker
 
-interface LogEntry {
-  timestamp: string
-  level: string
-  message: string
-  details?: any
-}
-
-interface ExecutionLog {
-  id: string
-  taskId: string
-  taskName: string
-  status: 'running' | 'success' | 'error' | 'aborted'
-  startTime: string
-  endTime?: string
-  duration?: number
-  stepsCount: number
-  successSteps: number
-  logs: LogEntry[]
-  createdAt: string
-}
-
 interface LogManagementProps {
   visible: boolean
   onClose: () => void
+  taskId?: string
 }
 
-export default function LogManagement({ visible, onClose }: LogManagementProps) {
+export default function LogManagement({ visible, onClose, taskId }: LogManagementProps) {
   const [logs, setLogs] = useState<ExecutionLog[]>([])
   const [filteredLogs, setFilteredLogs] = useState<ExecutionLog[]>([])
   const [selectedLog, setSelectedLog] = useState<ExecutionLog | null>(null)
   const [loading, setLoading] = useState(false)
   const [dateRange, setDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(null)
   const [searchText, setSearchText] = useState('')
+  const [statusFilter, setStatusFilter] = useState<string>('all')
 
   const loadLogs = useCallback(async () => {
     setLoading(true)
     try {
       const params = new URLSearchParams()
+      
+      if (taskId) {
+        params.set('taskId', taskId)
+      }
+      
       if (dateRange && dateRange[0] && dateRange[1]) {
         params.set('startDate', dateRange[0].startOf('day').toISOString())
         params.set('endDate', dateRange[1].endOf('day').toISOString())
@@ -54,7 +57,7 @@ export default function LogManagement({ visible, onClose }: LogManagementProps) 
       const response = await fetch(`/api/logs?${params.toString()}`)
       const data = await response.json()
 
-      if (data.success) {
+      if (data.logs) {
         setLogs(data.logs)
       } else {
         message.error(data.error || '加载日志失败')
@@ -67,7 +70,7 @@ export default function LogManagement({ visible, onClose }: LogManagementProps) 
     } finally {
       setLoading(false)
     }
-  }, [dateRange])
+  }, [taskId, dateRange])
 
   useEffect(() => {
     if (visible) {
@@ -82,13 +85,16 @@ export default function LogManagement({ visible, onClose }: LogManagementProps) 
       const search = searchText.toLowerCase()
       result = result.filter(log => 
         log.taskName.toLowerCase().includes(search) ||
-        log.taskId.toLowerCase().includes(search) ||
-        log.status.toLowerCase().includes(search)
+        log.taskId.toLowerCase().includes(search)
       )
     }
 
+    if (statusFilter !== 'all') {
+      result = result.filter(log => log.status === statusFilter)
+    }
+
     setFilteredLogs(result)
-  }, [logs, searchText])
+  }, [logs, searchText, statusFilter])
 
   const handleDelete = async (id: string) => {
     try {
@@ -213,7 +219,7 @@ export default function LogManagement({ visible, onClose }: LogManagementProps) 
 
   return (
     <Modal
-      title="执行日志管理"
+      title={taskId ? `执行日志 - 任务筛选` : '执行日志管理'}
       open={visible}
       onCancel={onClose}
       footer={null}
@@ -223,12 +229,24 @@ export default function LogManagement({ visible, onClose }: LogManagementProps) 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16, width: '100%' }}>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <Input
-            placeholder="搜索任务名称/ID/状态"
+            placeholder="搜索任务名称/ID"
             prefix={<SearchOutlined />}
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
-            style={{ width: 250 }}
+            style={{ width: 200 }}
             allowClear
+          />
+          <Select
+            value={statusFilter}
+            onChange={setStatusFilter}
+            style={{ width: 120 }}
+            options={[
+              { label: '全部状态', value: 'all' },
+              { label: '成功', value: 'success' },
+              { label: '失败', value: 'error' },
+              { label: '运行中', value: 'running' },
+              { label: '已终止', value: 'aborted' },
+            ]}
           />
           <RangePicker
             value={dateRange}
@@ -247,6 +265,7 @@ export default function LogManagement({ visible, onClose }: LogManagementProps) 
             onClick={() => {
               setDateRange(null)
               setSearchText('')
+              setStatusFilter('all')
             }}
           >
             清除筛选
@@ -258,6 +277,12 @@ export default function LogManagement({ visible, onClose }: LogManagementProps) 
             <Button danger>清除全部</Button>
           </Popconfirm>
         </div>
+
+        {taskId && (
+          <Tag closable onClose={() => onClose()}>
+            任务筛选: {taskId}
+          </Tag>
+        )}
 
         <Card size="small">
           <Spin spinning={loading}>

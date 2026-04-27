@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { Layout, Button, Space, Card, Typography, Tag, message, Modal, Empty, Spin, Badge, Progress, Alert, Radio } from 'antd'
 import {
@@ -39,7 +39,7 @@ const PRESET_FILES = [
   '/preset-tasks/demo-invoice-task.json',
 ]
 
-export default function HomePage() {
+function HomePageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const runTaskId = searchParams.get('run')
@@ -73,6 +73,7 @@ export default function HomePage() {
   const [abortController, setAbortController] = useState<AbortController | null>(null)
   const [isInitialized, setIsInitialized] = useState(false)
   const [showLogManagement, setShowLogManagement] = useState(false)
+  const [selectedTaskIdForLogs, setSelectedTaskIdForLogs] = useState<string | undefined>()
 
   const taskRef = useRef<TestTask | null>(null)
   const isStartingRef = useRef(false)
@@ -839,6 +840,28 @@ export default function HomePage() {
     }
   }
 
+  const handleExportTask = (task: TestTask) => {
+    try {
+      const taskData = JSON.stringify([task], null, 2)
+      const blob = new Blob([taskData], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      const fileName = task.name.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '_')
+      link.download = `${fileName}-${new Date().toISOString().split('T')[0]}.json`
+      link.click()
+      URL.revokeObjectURL(url)
+      message.success('任务导出成功')
+    } catch {
+      message.error('导出失败')
+    }
+  }
+
+  const handleViewLogs = (taskId: string) => {
+    setSelectedTaskIdForLogs(taskId)
+    setShowLogManagement(true)
+  }
+
   const handleDeleteTask = async (taskId: string) => {
     if (runningTaskId === taskId) {
       message.warning('无法删除正在执行的任务，请先终止执行')
@@ -989,6 +1012,8 @@ export default function HomePage() {
                     onDelete={() => handleDeleteTask(task.id)}
                     onViewResult={handleViewResult}
                     onSaveAsTemplate={() => saveTaskAsTemplate(task)}
+                    onExportTask={() => handleExportTask(task)}
+                    onViewLogs={() => handleViewLogs(task.id)}
                     isDisabled={!!runningTaskId && runningTaskId !== task.id}
                   />
                 ))}
@@ -1032,8 +1057,24 @@ export default function HomePage() {
       
       <LogManagement
         visible={showLogManagement}
-        onClose={() => setShowLogManagement(false)}
+        onClose={() => {
+          setShowLogManagement(false)
+          setSelectedTaskIdForLogs(undefined)
+        }}
+        taskId={selectedTaskIdForLogs}
       />
     </Layout>
+  )
+}
+
+export default function HomePage() {
+  return (
+    <Suspense fallback={
+      <Layout style={{ minHeight: '100vh', justifyContent: 'center', alignItems: 'center' }}>
+        <Spin size="large" tip="加载中..." />
+      </Layout>
+    }>
+      <HomePageContent />
+    </Suspense>
   )
 }

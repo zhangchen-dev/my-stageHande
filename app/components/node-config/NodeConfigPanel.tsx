@@ -1,5 +1,6 @@
 'use client'
 
+import { useEffect } from 'react'
 import { Form, Input, Select, InputNumber, Button, Space, Card, Typography, Divider, Tag } from 'antd'
 import { WorkflowNode, OperationType, ExecuteStrategy } from '@/lib/workflow/types'
 import { DeleteOutlined, SaveOutlined } from '@ant-design/icons'
@@ -9,6 +10,8 @@ const { TextArea } = Input
 
 const getTypeLabel = (type: OperationType): string => {
   const labels: Record<OperationType, string> = {
+    [OperationType.START]: '开始',
+    [OperationType.END]: '结束',
     [OperationType.CONDITION]: '条件判断',
     [OperationType.CLICK]: '点击元素',
     [OperationType.OPEN_PAGE]: '打开页面',
@@ -44,6 +47,23 @@ export default function NodeConfigPanel({
 }: NodeConfigPanelProps) {
   const [form] = Form.useForm()
 
+  // 当节点改变时，更新表单值
+  useEffect(() => {
+    console.log('[NodeConfigPanel] 节点改变，更新表单:', node.id, node.name, {
+      conditionTrueNodeId: node.conditionTrueNodeId,
+      conditionFalseNodeId: node.conditionFalseNodeId,
+      nextNodeId: node.nextNodeId
+    })
+    form.setFieldsValue({
+      type: node.type,
+      strategy: node.strategy,
+      nextNodeId: node.nextNodeId,
+      conditionTrueNodeId: node.conditionTrueNodeId,
+      conditionFalseNodeId: node.conditionFalseNodeId,
+      params: node.params,
+    })
+  }, [node.id, node.type, node.strategy, node.nextNodeId, node.conditionTrueNodeId, node.conditionFalseNodeId, node.params, form])
+
   // 使用基于实际节点列表的连续编号
   const getNodeIndex = (nodeId: string): number => {
     return allNodes.findIndex(n => n.id === nodeId) + 1
@@ -51,6 +71,8 @@ export default function NodeConfigPanel({
 
   const getNodeDisplayLabel = (n: WorkflowNode): string => {
     const typeLabels: Record<OperationType, string> = {
+      [OperationType.START]: '开始',
+      [OperationType.END]: '结束',
       [OperationType.OPEN_PAGE]: '打开页面',
       [OperationType.CLICK]: '点击元素',
       [OperationType.CONDITION]: '条件判断',
@@ -67,6 +89,14 @@ export default function NodeConfigPanel({
     const nodeIndex = getNodeIndex(n.id)
     const typeName = typeLabels[n.type] || n.type
     let desc = ''
+    
+    if (n.type === OperationType.START) {
+      return `#${nodeIndex} 开始`
+    }
+    
+    if (n.type === OperationType.END) {
+      return `#${nodeIndex} 结束`
+    }
     
     if (n.type === OperationType.OPEN_PAGE && n.params.url) {
       desc = n.params.url.length > 25 ? n.params.url.slice(0, 25) + '...' : n.params.url
@@ -100,6 +130,30 @@ export default function NodeConfigPanel({
 
   const renderTypeSpecificParams = () => {
     switch (node.type) {
+      case OperationType.START:
+        return (
+          <div style={{ padding: 12, background: '#f6f8fa', borderRadius: 4, fontSize: 12, color: '#666' }}>
+            🚀 开始节点：工作流的起始点，必须连接到下一个节点
+          </div>
+        )
+
+      case OperationType.END:
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, width: '100%' }}>
+            <Form.Item label="输出内容" name={['params', 'output']}>
+              <TextArea 
+                rows={4}
+                placeholder="任务结束时的输出内容或说明"
+                onChange={(e) => onUpdate({ params: { ...node.params, output: e.target.value } })}
+              />
+            </Form.Item>
+            
+            <div style={{ padding: 12, background: '#f6f8fa', borderRadius: 4, fontSize: 12, color: '#666' }}>
+              🏁 结束节点：工作流的终点，不需要连接下一个节点
+            </div>
+          </div>
+        )
+
       case OperationType.OPEN_PAGE:
         return (
           <Form.Item label="页面 URL" name={['params', 'url']} rules={[{ required: true, message: '请输入 URL' }]}>
@@ -397,132 +451,146 @@ export default function NodeConfigPanel({
         {/* 节点基本信息 - 精简版 */}
         <div style={{ marginBottom: 8 }}>
           <Text strong style={{ fontSize: 14 }}>
-            #{currentNodeIndex} {node.name || node.type}
+            #{currentNodeIndex} {node.name || getTypeLabel(node.type)}
           </Text>
           <Paragraph copyable={{ text: node.id }} style={{ marginBottom: 0, fontSize: 11, color: '#999' }}>
             ID: {node.id.slice(0, 12)}...
           </Paragraph>
         </div>
 
-        <Form.Item label="操作类型" name="type">
-          <Select
-            disabled={isNewNode}
-            options={[
-              { value: OperationType.CONDITION, label: '条件判断' },
-              { value: OperationType.CLICK, label: '点击元素' },
-              { value: OperationType.OPEN_PAGE, label: '打开页面' },
-              { value: OperationType.FORM_FILL, label: '表单填写' },
-              { value: OperationType.SCROLL, label: '滚动页面' },
-              { value: OperationType.NODE_SELECT, label: '选择节点' },
-              { value: OperationType.SCRIPT_EXEC, label: '执行脚本' },
-              { value: OperationType.HOVER, label: '悬停元素' },
-              { value: OperationType.SCREENSHOT, label: '页面截取' },
-              { value: OperationType.AI_TASK, label: 'AI任务' },
-            ]}
-            onChange={(value) => onUpdate({ type: value as OperationType })}
-          />
-        </Form.Item>
-        {isNewNode && (
-          <div style={{ 
-            padding: '8px 12px', 
-            background: '#f6f8fa', 
-            borderRadius: 4, 
-            fontSize: 11, 
-            color: '#666',
-            marginBottom: 8
-          }}>
-            ℹ️ 当前节点类型为新建时选择的「{getTypeLabel(node.type)}」，如需修改请保存后重新编辑
-          </div>
+        {/* 开始和结束节点不能更改类型 */}
+        {node.type !== OperationType.START && node.type !== OperationType.END && (
+          <>
+            <Form.Item label="操作类型" name="type">
+              <Select
+                disabled={isNewNode}
+                options={[
+                  { value: OperationType.CONDITION, label: '条件判断' },
+                  { value: OperationType.CLICK, label: '点击元素' },
+                  { value: OperationType.OPEN_PAGE, label: '打开页面' },
+                  { value: OperationType.FORM_FILL, label: '表单填写' },
+                  { value: OperationType.SCROLL, label: '滚动页面' },
+                  { value: OperationType.NODE_SELECT, label: '选择节点' },
+                  { value: OperationType.SCRIPT_EXEC, label: '执行脚本' },
+                  { value: OperationType.HOVER, label: '悬停元素' },
+                  { value: OperationType.SCREENSHOT, label: '页面截取' },
+                  { value: OperationType.AI_TASK, label: 'AI任务' },
+                  { value: OperationType.WAIT, label: '等待' },
+                ]}
+                onChange={(value) => onUpdate({ type: value as OperationType })}
+              />
+            </Form.Item>
+            {isNewNode && (
+              <div style={{ 
+                padding: '8px 12px', 
+                background: '#f6f8fa', 
+                borderRadius: 4, 
+                fontSize: 11, 
+                color: '#666',
+                marginBottom: 8
+              }}>
+                ℹ️ 当前节点类型为新建时选择的「{getTypeLabel(node.type)}」，如需修改请保存后重新编辑
+              </div>
+            )}
+
+            <Form.Item label="执行策略" name="strategy">
+              <Select 
+                options={[
+                  { value: ExecuteStrategy.AUTO, label: '自动选择 (AUTO)' },
+                  { value: ExecuteStrategy.AI, label: 'AI 识别 (AI)' },
+                  { value: ExecuteStrategy.SELECTOR, label: '选择器 (SELECTOR)' },
+                ]}
+                onChange={(value) => onUpdate({ strategy: value as ExecuteStrategy })}
+              />
+            </Form.Item>
+          </>
         )}
 
-        <Form.Item label="执行策略" name="strategy">
-          <Select 
-            options={[
-              { value: ExecuteStrategy.AUTO, label: '自动选择 (AUTO)' },
-              { value: ExecuteStrategy.AI, label: 'AI 识别 (AI)' },
-              { value: ExecuteStrategy.SELECTOR, label: '选择器 (SELECTOR)' },
-            ]}
-            onChange={(value) => onUpdate({ strategy: value as ExecuteStrategy })}
-          />
-        </Form.Item>
-
-        <Form.Item 
-          label="下一个节点 →" 
-          name="nextNodeId"
-          tooltip={
-            <div>
-              <div>• 留空：自动连接到顺序上的下一个节点</div>
-              <div>• 选择：手动指定要跳转到的节点</div>
-              <div>• 支持创建循环和条件跳转</div>
-            </div>
-          }
-        >
-          <Select 
-            allowClear
-            placeholder="留空则自动连接下一节点"
-            showSearch
-            optionFilterProp="label"
-            options={allNodes.filter(n => n.id !== node.id).map((n) => {
-              const targetIndex = getNodeIndex(n.id)
-              const isSequentialNext = targetIndex === currentNodeIndex + 1
-              
-              return {
-                value: n.id,
-                label: (
-                  <span>
-                    {getNodeDisplayLabel(n)}
-                    {isSequentialNext && (
-                      <Tag color="blue" style={{ marginLeft: 8, fontSize: 11 }}>
-                        顺序下一
-                      </Tag>
-                    )}
-                  </span>
-                ),
+        {/* 结束节点不需要选择下一个节点 */}
+        {node.type !== OperationType.END && (
+          <>
+            <Form.Item 
+              label={node.type === OperationType.START ? "下一个节点（必选）→" : "下一个节点 →"} 
+              name="nextNodeId"
+              required={node.type === OperationType.START}
+              tooltip={
+                node.type === OperationType.START 
+                  ? "开始节点必须连接到下一个节点"
+                  : <div>
+                      <div>• 留空：自动连接到顺序上的下一个节点</div>
+                      <div>• 选择：手动指定要跳转到的节点</div>
+                      <div>• 支持创建循环和条件跳转</div>
+                    </div>
               }
-            })}
-            onChange={(value) => {
-              console.log('[NodeConfig] 选择下一个节点:', { 
-                nodeId: node.id, 
-                selectedNextNodeId: value,
-                nodeName: node.name 
-              })
-              onUpdate({ nextNodeId: value || '' })
-            }}
-            onSelect={(value) => {
-              console.log('[NodeConfig] 确认选择:', value)
-              onUpdate({ nextNodeId: value as string })
-            }}
-          />
-        </Form.Item>
+            >
+              <Select 
+                allowClear={node.type !== OperationType.START}
+                placeholder={node.type === OperationType.START ? "请选择下一个节点" : "留空则自动连接下一节点"}
+                showSearch
+                optionFilterProp="label"
+                options={allNodes.filter(n => n.id !== node.id && n.type !== OperationType.START).map((n) => {
+                  const targetIndex = getNodeIndex(n.id)
+                  const isSequentialNext = targetIndex === currentNodeIndex + 1
+                  
+                  return {
+                    value: n.id,
+                    label: (
+                      <span>
+                        {getNodeDisplayLabel(n)}
+                        {isSequentialNext && (
+                          <Tag color="blue" style={{ marginLeft: 8, fontSize: 11 }}>
+                            顺序下一
+                          </Tag>
+                        )}
+                      </span>
+                    ),
+                  }
+                })}
+                onChange={(value) => {
+                  console.log('[NodeConfig] 选择下一个节点:', { 
+                    nodeId: node.id, 
+                    selectedNextNodeId: value,
+                    nodeName: node.name 
+                  })
+                  onUpdate({ nextNodeId: value || '' })
+                }}
+                onSelect={(value) => {
+                  console.log('[NodeConfig] 确认选择:', value)
+                  onUpdate({ nextNodeId: value as string })
+                }}
+              />
+            </Form.Item>
 
-        {/* 显示当前连接状态 - 精简版 */}
-        {!node.nextNodeId && currentNodeIndex < allNodes.length && (
-          <div style={{ 
-            padding: '8px 12px', 
-            background: '#f6f8fa', 
-            borderRadius: 4, 
-            fontSize: 11, 
-            color: '#666',
-          }}>
-            ℹ️ 自动连接到: #{currentNodeIndex + 1} {nextSequentialNode?.name}
-          </div>
+            {/* 显示当前连接状态 - 精简版 */}
+            {!node.nextNodeId && currentNodeIndex < allNodes.length && node.type !== OperationType.START && (
+              <div style={{ 
+                padding: '8px 12px', 
+                background: '#f6f8fa', 
+                borderRadius: 4, 
+                fontSize: 11, 
+                color: '#666',
+              }}>
+                ℹ️ 自动连接到: #{currentNodeIndex + 1} {nextSequentialNode?.name}
+              </div>
+            )}
+
+            {node.nextNodeId && (() => {
+              const targetNode = allNodes.find(n => n.id === node.nextNodeId)
+              return targetNode ? (
+                <div style={{ 
+                  padding: '8px 12px', 
+                  background: '#e6f7ff', 
+                  borderRadius: 4, 
+                  fontSize: 11, 
+                  color: '#1890ff',
+                  border: '1px solid #91d5ff'
+                }}>
+                  ✓ 已连接到: #{getNodeIndex(targetNode.id)} {targetNode.name}
+                </div>
+              ) : null
+            })()}
+          </>
         )}
-
-        {node.nextNodeId && (() => {
-          const targetNode = allNodes.find(n => n.id === node.nextNodeId)
-          return targetNode ? (
-            <div style={{ 
-              padding: '8px 12px', 
-              background: '#e6f7ff', 
-              borderRadius: 4, 
-              fontSize: 11, 
-              color: '#1890ff',
-              border: '1px solid #91d5ff'
-            }}>
-              ✓ 已连接到: #{getNodeIndex(targetNode.id)} {targetNode.name}
-            </div>
-          ) : null
-        })()}
 
         <Divider plain>参数配置</Divider>
         

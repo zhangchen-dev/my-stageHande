@@ -41,6 +41,9 @@ const NODE_TYPES = [
   { value: OperationType.AI_TASK, label: 'AI任务', icon: <RobotOutlined />, color: '#13c2c2' },
 ]
 
+const START_NODE_TYPE = { value: OperationType.START, label: '开始', icon: <GlobalOutlined />, color: '#52c41a' }
+const END_NODE_TYPE = { value: OperationType.END, label: '结束', icon: <CheckSquareOutlined />, color: '#ff4d4f' }
+
 export default function WorkflowCanvas({
   config,
   selectedNode,
@@ -77,16 +80,10 @@ export default function WorkflowCanvas({
   if (!validStartNodeId || validNodes.length === 0) {
     return (
       <Empty
-        description="暂无节点，请添加开始节点"
+        description="工作流配置错误"
         style={{ margin: '100px 0' }}
       >
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={() => onAddNode(OperationType.OPEN_PAGE)}
-        >
-          添加开始节点
-        </Button>
+        <Text type="secondary">请重新创建工作流</Text>
       </Empty>
     )
   }
@@ -116,7 +113,16 @@ export default function WorkflowCanvas({
 
     const isSelected = selectedNode === node.id
     const isHovered = hoveredNode === node.id
-    const typeInfo = NODE_TYPES.find(t => t.value === node.type)
+    
+    let typeInfo
+    if (node.type === OperationType.START) {
+      typeInfo = START_NODE_TYPE
+    } else if (node.type === OperationType.END) {
+      typeInfo = END_NODE_TYPE
+    } else {
+      typeInfo = NODE_TYPES.find(t => t.value === node.type)
+    }
+    
     const nodeIndex = getNodeIndex(node.id)
 
     let nextNodes: React.ReactNode[] = []
@@ -294,8 +300,8 @@ export default function WorkflowCanvas({
               )}
             </div>
 
-            {/* 添加按钮（非条件节点） */}
-            {node.type !== OperationType.CONDITION && (
+            {/* 添加按钮（非条件节点、非结束节点） */}
+            {node.type !== OperationType.CONDITION && node.type !== OperationType.END && (
               <Dropdown menu={{ items: addMenuItems }} trigger={['click']}>
                 <Button
                   type="link"
@@ -386,6 +392,10 @@ export default function WorkflowCanvas({
 
 function getNodeDescription(node: WorkflowNode): string {
   switch (node.type) {
+    case OperationType.START:
+      return '工作流起始点'
+    case OperationType.END:
+      return node.params.output || '工作流终点'
     case OperationType.OPEN_PAGE:
       return node.params.url || '未设置 URL'
     case OperationType.CLICK:

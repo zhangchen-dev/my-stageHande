@@ -178,6 +178,23 @@ export interface LogEntry {
   details?: Record<string, unknown>
 }
 
+// ==================== 执行日志 ====================
+
+export interface ExecutionLog {
+  id: string
+  taskId: string
+  taskName: string
+  startTime: string
+  endTime?: string
+  duration?: number
+  status: 'running' | 'success' | 'error' | 'aborted'
+  logs: LogEntry[]
+  stepsCount: number
+  successSteps: number
+  failedSteps: number
+  createdAt: string
+}
+
 // ==================== API 请求/响应类型 ====================
 
 export interface ExecuteTaskRequest {

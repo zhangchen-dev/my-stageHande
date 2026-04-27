@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>测试任务执行 - demo-test.json</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      max-width: 1200px;
+      margin: 20px auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    .container {
+      background: white;
+      padding: 30px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+    }
+    h1 { color: #1890ff; margin-bottom: 20px; }
+    h2 { color: #52c41a; margin-top: 30px; margin-bottom: 15px; }
+    .button {
+      display: inline-block;
+      padding: 12px 24px;
+      background: #1890ff;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 16px;
+      margin: 10px 10px 10px 0;
+      transition: background 0.3s;
+    }
+    .button:hover { background: #40a9ff; }
+    .button.success { background: #52c41a; }
+    .button.success:hover { background: #73d13d; }
+    .button.danger { background: #ff4d4f; }
+    .button.danger:hover { background: #ff7875; }
+    .log {
+      margin-top: 20px;
+      padding: 15px;
+      background: #f6f8fa;
+      border-radius: 4px;
+      font-family: 'Courier New', monospace;
+      font-size: 13px;
+      max-height: 500px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      border: 1px solid #e8e8e8;
+    }
+    .status {
+      padding: 12px;
+      margin: 15px 0;
+      border-radius: 4px;
+      display: none;
+    }
+    .status.success { background: #f6ffed; border: 1px solid #b7eb8f; color: #52c41a; display: block; }
+    .status.error { background: #fff2f0; border: 1px solid #ffccc7; color: #ff4d4f; display: block; }
+    .status.info { background: #e6f7ff; border: 1px solid #91d5ff; color: #1890ff; display: block; }
+    .status.warning { background: #fffbe6; border: 1px solid #ffe58f; color: #faad14; display: block; }
+    .task-info {
+      background: #fafafa;
+      padding: 15px;
+      border-radius: 4px;
+      margin: 15px 0;
+      border-left: 4px solid #1890ff;
+    }
+    .task-info h3 { margin: 0 0 10px 0; color: #1890ff; }
+    .task-info p { margin: 5px 0; color: #666; }
+    .step-list {
+      list-style: none;
+      padding: 0;
+      margin: 15px 0;
+    }
+    .step-list li {
+      padding: 8px 12px;
+      margin: 5px 0;
+      background: #f9f9f9;
+      border-radius: 4px;
+      border-left: 3px solid #52c41a;
+    }
+    .step-list li.step-wait { border-left-color: #faad14; }
+    .step-list li.step-click { border-left-color: #1890ff; }
+    .step-list li.step-screenshot { border-left-color: #722ed1; }
+    .step-list li.step-js { border-left-color: #eb2f96; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🧪 测试任务执行</h1>
+    <p>此工具用于导入 demo-test.json 并测试任务执行功能</p>
+
+    <div id="taskInfo" class="task-info" style="display: none;">
+      <h3>📋 任务信息</h3>
+      <p><strong>任务名称:</strong> <span id="taskName"></span></p>
+      <p><strong>步骤数量:</strong> <span id="stepCount"></span></p>
+      <p><strong>任务ID:</strong> <span id="taskId"></span></p>
+      <h4 style="margin-top: 15px; margin-bottom: 10px;">步骤列表:</h4>
+      <ul id="stepList" class="step-list"></ul>
+    </div>
+
+    <div>
+      <button class="button" onclick="loadTask()">📥 加载任务</button>
+      <button class="button success" onclick="executeTask()" id="executeBtn" disabled>▶️ 执行任务</button>
+      <button class="button danger" onclick="stopTask()" id="stopBtn" disabled>⏹️ 停止任务</button>
+      <a href="/" class="button">🏠 返回主页</a>
+    </div>
+
+    <div id="status" class="status"></div>
+    <div id="log" class="log">准备就绪，点击"加载任务"开始测试...\n</div>
+  </div>
+
+  <script>
+    const logEl = document.getElementById('log')
+    const statusEl = document.getElementById('status')
+    const taskInfoEl = document.getElementById('taskInfo')
+    const executeBtn = document.getElementById('executeBtn')
+    const stopBtn = document.getElementById('stopBtn')
+
+    let currentTask = null
+    let eventSource = null
+
+    function log(message, type = 'info') {
+      const timestamp = new Date().toLocaleTimeString()
+      const colorMap = {
+        'info': '#1890ff',
+        'success': '#52c41a',
+        'error': '#ff4d4f',
+        'warning': '#faad14'
+      }
+      logEl.innerHTML += `<span style="color: ${colorMap[type]}">[${timestamp}]</span> ${message}\n`
+      logEl.scrollTop = logEl.scrollHeight
+    }
+
+    function showStatus(message, type) {
+      statusEl.textContent = message
+      statusEl.className = 'status ' + type
+    }
+
+    async function loadTask() {
+      try {
+        showStatus('正在加载任务...', 'info')
+        log('开始加载 demo-test.json...')
+
+        const response = await fetch('/demo-test.json')
+        if (!response.ok) throw new Error('无法加载 demo-test.json')
+        const steps = await response.json()
+
+        log(`✅ JSON 文件加载成功，共 ${steps.length} 个步骤`, 'success')
+
+        // 创建任务对象
+        currentTask = {
+          id: `demo_${Date.now()}`,
+          name: '发票录入演示测试',
+          description: '演示页面的完整测试流程',
+          steps: steps,
+          status: 'ready',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          tags: ['demo', 'test']
+        }
+
+        // 显示任务信息
+        document.getElementById('taskName').textContent = currentTask.name
+        document.getElementById('stepCount').textContent = steps.length
+        document.getElementById('taskId').textContent = currentTask.id
+
+        // 显示步骤列表
+        const stepListEl = document.getElementById('stepList')
+        stepListEl.innerHTML = ''
+        steps.forEach((step, index) => {
+          const li = document.createElement('li')
+          li.className = `step-${step.type}`
+          li.textContent = `${index + 1}. [${step.type}] ${step.description}`
+          stepListEl.appendChild(li)
+        })
+
+        taskInfoEl.style.display = 'block'
+        executeBtn.disabled = false
+
+        showStatus('✅ 任务加载成功！点击"执行任务"开始测试', 'success')
+        log('任务加载完成，可以开始执行', 'success')
+
+      } catch (error) {
+        log(`❌ 加载失败: ${error.message}`, 'error')
+        showStatus('❌ 加载失败: ' + error.message, 'error')
+        console.error(error)
+      }
+    }
+
+    async function executeTask() {
+      if (!currentTask) {
+        showStatus('请先加载任务', 'error')
+        return
+      }
+
+      try {
+        showStatus('正在启动任务执行...', 'info')
+        log('开始执行任务...', 'warning')
+        executeBtn.disabled = true
+        stopBtn.disabled = false
+
+        const response = await fetch('/api/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            testId: currentTask.id,
+            steps: currentTask.steps,
+            useHeadful: true,
+            strategy: 'auto'
+          })
+        })
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+        }
+
+        log('✅ 任务已提交，开始接收执行日志...', 'success')
+
+        // 处理 SSE 流
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          const text = decoder.decode(value)
+          const lines = text.split('\n')
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const logEntry = JSON.parse(line.substring(6))
+                handleLogEntry(logEntry)
+              } catch (e) {
+                console.error('解析日志失败:', e)
+              }
+            }
+          }
+        }
+
+        showStatus('✅ 任务执行完成！', 'success')
+        log('任务执行完成', 'success')
+        stopBtn.disabled = true
+        executeBtn.disabled = false
+
+      } catch (error) {
+        log(`❌ 执行失败: ${error.message}`, 'error')
+        showStatus('❌ 执行失败: ' + error.message, 'error')
+        console.error(error)
+        stopBtn.disabled = true
+        executeBtn.disabled = false
+      }
+    }
+
+    function handleLogEntry(entry) {
+      const levelMap = {
+        'info': 'info',
+        'success': 'success',
+        'error': 'error',
+        'warning': 'warning'
+      }
+      log(entry.message, levelMap[entry.level] || 'info')
+    }
+
+    async function stopTask() {
+      if (!currentTask) return
+
+      try {
+        const response = await fetch('/api/test', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            testId: currentTask.id,
+            reason: '用户手动停止'
+          })
+        })
+
+        const result = await response.json()
+        log('⏹️ 已发送停止信号', 'warning')
+        showStatus('⏹️ 任务已停止', 'warning')
+        stopBtn.disabled = true
+        executeBtn.disabled = false
+
+      } catch (error) {
+        log(`❌ 停止失败: ${error.message}`, 'error')
+      }
+    }
+
+    // 页面加载完成
+    window.addEventListener('load', () => {
+      log('页面加载完成，点击"加载任务"开始测试')
+    })
+  </script>
+</body>
+</html>

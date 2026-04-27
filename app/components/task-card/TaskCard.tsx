@@ -11,6 +11,8 @@ import {
   MoreOutlined,
   SaveOutlined,
   HistoryOutlined,
+  ExportOutlined,
+  FileTextOutlined,
 } from '@ant-design/icons'
 import { TestTask, TestResult } from '@/types'
 import { STATUS_COLORS, STATUS_LABELS } from '@/app/constants'
@@ -28,6 +30,8 @@ interface TaskCardProps {
   onDelete: () => void
   onViewResult: (result: TestResult) => void
   onSaveAsTemplate: () => void
+  onExportTask?: () => void
+  onViewLogs?: () => void
   isDisabled?: boolean
 }
 
@@ -42,22 +46,30 @@ export default function TaskCard({
   onDelete,
   onViewResult,
   onSaveAsTemplate,
+  onExportTask,
+  onViewLogs,
   isDisabled = false,
 }: TaskCardProps) {
   const items: MenuProps['items'] = [
-    {
-      key: 'edit',
-      icon: <EditOutlined />,
-      label: '编辑任务',
-      onClick: onEdit,
-      disabled: isDisabled,
-    },
     {
       key: 'template',
       icon: <SaveOutlined />,
       label: '保存为模板',
       onClick: onSaveAsTemplate,
       disabled: isDisabled,
+    },
+    {
+      key: 'export',
+      icon: <ExportOutlined />,
+      label: '导出任务',
+      onClick: onExportTask,
+      disabled: isDisabled,
+    },
+    {
+      key: 'logs',
+      icon: <FileTextOutlined />,
+      label: '查看日志',
+      onClick: onViewLogs,
     },
     latestResult ? {
       key: 'result',

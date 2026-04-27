@@ -526,6 +526,8 @@ export class WorkflowEngine {
 
     console.log(`[Goto] 开始导航到: ${step.value.substring(0, 80)}...`)
 
+    console.log('%c [ step.value ]-530', 'font-size:13px; background:pink; color:#bf2c9f;', step.value)
+    debugger
     await this.context.page.goto(step.value, {
       waitUntil: 'networkidle',
       timeout: 60000
@@ -809,6 +811,9 @@ export class WorkflowEngine {
 
     const isLoopMode = step.loop === true
     const maxIterations = isLoopMode ? (step.maxLoopIterations || 10) : 1
+    const maxConsecutiveFailures = 3
+    let consecutiveFailures = 0
+    let lastError = ''
 
     this.onLog?.(`[交互] ${isLoopMode ? '🔄 循环模式' : '单次模式'}，最大迭代: ${maxIterations}次`)
 
@@ -828,10 +833,11 @@ export class WorkflowEngine {
           { page }
         )
       } catch (e) {
-        this.onLog?.(`[交互] 观察失败: ${(e as Error).message.substring(0, 100)}`)
+        lastError = (e as Error).message
+        this.onLog?.(`[交互] 观察失败: ${lastError.substring(0, 100)}`)
 
         if (!isLoopMode) {
-          console.log(`[交互] observe 失败，直接尝试 act: ${(e as Error).message}`)
+          console.log(`[交互] observe 失败，直接尝试 act: ${lastError}`)
         }
       }
 
@@ -858,7 +864,8 @@ export class WorkflowEngine {
               return
             }
           } catch (e) {
-            this.onLog?.(`[交互] 动作失败: ${(e as Error).message.substring(0, 100)}`)
+            lastError = (e as Error).message
+            this.onLog?.(`[交互] 动作失败: ${lastError.substring(0, 100)}`)
           }
         }
       }
@@ -880,11 +887,22 @@ export class WorkflowEngine {
           return
         }
       } catch (e) {
-        this.onLog?.(`[交互] 直接act失败: ${(e as Error).message.substring(0, 100)}`)
+        lastError = (e as Error).message
+        this.onLog?.(`[交互] 直接act失败: ${lastError.substring(0, 100)}`)
       }
 
       if (!isLoopMode) {
         throw new Error('交互操作失败')
+      }
+
+      consecutiveFailures++
+      this.onLog?.(`[交互] ⚠️ 连续失败次数: ${consecutiveFailures}/${maxConsecutiveFailures}`)
+
+      if (consecutiveFailures >= maxConsecutiveFailures) {
+        this.onLog?.(`[交互] ❌ 连续失败${maxConsecutiveFailures}次，终止循环`)
+        record.status = 'failed'
+        record.error = `连续失败${maxConsecutiveFailures}次，最后错误: ${lastError.substring(0, 200)}`
+        throw new Error(`连续失败${maxConsecutiveFailures}次: ${lastError}`)
       }
 
       if (iteration < maxIterations) {

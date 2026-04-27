@@ -1,3 +1,20 @@
+/**
+ * @file route.ts
+ * @description 测试执行 API - 执行自动化测试任务并返回实时日志流
+ * @module 测试执行 API
+ * 
+ * 路由：
+ * - POST /api/test          启动测试执行（SSE 流式响应）
+ * - GET  /api/test          查询是否有正在运行的任务
+ * - PUT  /api/test          终止正在运行的测试任务
+ * 
+ * 功能：
+ * - 初始化 Stagehand 浏览器实例
+ * - 按顺序执行测试步骤（支持多种策略：selector/ai/auto）
+ * - 通过 Server-Sent Events (SSE) 实时推送执行日志
+ * - 支持任务中止和浏览器资源清理
+ */
+
 import { NextRequest } from 'next/server'
 import { Stagehand } from '@browserbasehq/stagehand'
 import { initDirectories, PATHS } from '@/utils/file'
@@ -16,7 +33,6 @@ export async function POST(req: NextRequest) {
   const defaultStrategy: ExecutionStrategy = requestData.strategy || 'auto'
   const customScreenshotDir = requestData.screenshotOutputDir || undefined
   const testId: string = requestData.testId || `test_${Date.now()}`
-  const stepInterval: number = requestData.stepInterval || 10000
   
   if (customScreenshotDir) {
     try {
@@ -43,7 +59,7 @@ export async function POST(req: NextRequest) {
         const baseURL = process.env.AI_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.siliconflow.cn/v1'
 
         if (!apiKey) {
-          throw new Error('未配置 API Key！请在 .env 中设置 SILICONFLOW_API_KEY 或 OPENAI_API_KEY')
+          throw new Error('未配置 API Key！请在 .env.local 中设置 SILICONFLOW_API_KEY 或 OPENAI_API_KEY')
         }
 
         console.log(`[Stagehand] 初始化配置: baseURL=${baseURL}, apiKey=${apiKey.substring(0, 10)}...`)
@@ -68,6 +84,7 @@ export async function POST(req: NextRequest) {
         registerTask(testId, stagehand)
         
         const page = stagehand.context.pages()[0]
+        console.log('%c [ page ]-87', 'font-size:13px; background:pink; color:#bf2c9f;', page)
 
         sendLog({
           timestamp: new Date().toISOString(),
@@ -91,8 +108,7 @@ export async function POST(req: NextRequest) {
             })
           },
           customScreenshotDir,
-          testId,
-          stepInterval
+          testId
         )
 
         if (isTaskAborted(testId)) {
@@ -123,8 +139,8 @@ export async function POST(req: NextRequest) {
             })
           }
 
-          const passedSteps = result.records.filter((r: StepExecutionRecord) => r.status === 'success').length
-          const failedSteps = result.records.filter((r: StepExecutionRecord) => r.status === 'failed').length
+          const passedSteps = result.records.filter(r => r.status === 'success').length
+          const failedSteps = result.records.filter(r => r.status === 'failed').length
           const totalDuration = Date.now() - startTime
 
           sendLog({

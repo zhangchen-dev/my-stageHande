@@ -41,18 +41,14 @@
     "type": "condition",
     "description": "【条件判断】检查页面是否存在手指指引元素（tour-guide-point）",
     "strategy": "selector",
-    "selector": {
-      "css": "tour-guide-point"
-    },
+    "selector": "tour-guide-point",
     "thenSteps": [
       {
         "id": "step_07_click_guide",
         "type": "click",
         "description": "点击手指指引元素",
         "strategy": "selector",
-        "selector": {
-          "css": "tour-guide-point"
-        }
+        "selector": "tour-guide-point"
       },
       {
         "id": "step_08_wait_after_click",

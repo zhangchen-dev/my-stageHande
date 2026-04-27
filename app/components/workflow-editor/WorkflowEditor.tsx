@@ -117,22 +117,31 @@ export default function WorkflowEditor() {
   }
 
   const createNewWorkflow = () => {
-    const startNodeId = `node_${Date.now()}`
+    const startNodeId = `node_start_${Date.now()}`
+    const endNodeId = `node_end_${Date.now() + 1}`
     const newConfig: WorkflowConfig = {
       startNodeId: startNodeId,
       nodes: [
         {
           id: startNodeId,
-          name: '开始节点',
-          type: OperationType.OPEN_PAGE,
+          name: '开始',
+          type: OperationType.START,
           strategy: ExecuteStrategy.AUTO,
-          params: { url: '' },
+          params: {},
+          nextNodeId: endNodeId,
+        },
+        {
+          id: endNodeId,
+          name: '结束',
+          type: OperationType.END,
+          strategy: ExecuteStrategy.AUTO,
+          params: { output: '' },
           nextNodeId: '',
         },
       ],
     }
     
-    console.log('[createNewWorkflow] 创建新工作流:', { startNodeId, nodes: newConfig.nodes })
+    console.log('[createNewWorkflow] 创建新工作流:', { startNodeId, endNodeId, nodes: newConfig.nodes })
     setConfig(newConfig)
     setOriginalConfig(null)
     setTaskName('新工作流')
@@ -386,6 +395,18 @@ export default function WorkflowEditor() {
   }
 
   const removeNode = (nodeId: string) => {
+    const nodeToDelete = config.nodes.find(n => n.id === nodeId)
+    
+    if (nodeToDelete?.type === OperationType.START) {
+      message.warning('开始节点不能删除')
+      return
+    }
+    
+    if (nodeToDelete?.type === OperationType.END) {
+      message.warning('结束节点不能删除')
+      return
+    }
+    
     Modal.confirm({
       title: '确认删除',
       content: '确定要删除这个节点吗？相关的连接也会被删除。',
@@ -482,7 +503,33 @@ export default function WorkflowEditor() {
     const connectedNodes = nodes.map((node, index) => {
       const updatedNode = { ...node }
 
-      if (!updatedNode.nextNodeId && index < nodes.length - 1 && updatedNode.type !== OperationType.CONDITION) {
+      // 结束节点不需要连接下一个节点
+      if (updatedNode.type === OperationType.END) {
+        updatedNode.nextNodeId = ''
+        return updatedNode
+      }
+
+      // 条件节点使用 conditionTrueNodeId 和 conditionFalseNodeId，不设置 nextNodeId
+      if (updatedNode.type === OperationType.CONDITION) {
+        return updatedNode
+      }
+
+      // 开始节点必须连接到下一个节点
+      if (updatedNode.type === OperationType.START) {
+        if (!updatedNode.nextNodeId && index < nodes.length - 1) {
+          // 找到下一个非START节点
+          for (let i = index + 1; i < nodes.length; i++) {
+            if (nodes[i].type !== OperationType.START) {
+              updatedNode.nextNodeId = nodes[i].id
+              break
+            }
+          }
+        }
+        return updatedNode
+      }
+
+      // 其他节点：如果 nextNodeId 为空，自动连接到顺序上的下一个节点
+      if (!updatedNode.nextNodeId && index < nodes.length - 1) {
         updatedNode.nextNodeId = nodes[index + 1].id
       }
 
@@ -671,6 +718,7 @@ export default function WorkflowEditor() {
                 { key: OperationType.FORM_FILL, label: '表单填写', onClick: () => addNode(OperationType.FORM_FILL) },
                 { key: OperationType.SCROLL, label: '滚动页面', onClick: () => addNode(OperationType.SCROLL) },
                 { key: OperationType.HOVER, label: '悬停元素', onClick: () => addNode(OperationType.HOVER) },
+                { key: OperationType.WAIT, label: '等待', onClick: () => addNode(OperationType.WAIT) },
                 { key: OperationType.SCRIPT_EXEC, label: '执行脚本', onClick: () => addNode(OperationType.SCRIPT_EXEC) },
                 { key: OperationType.NODE_SELECT, label: '选择节点', onClick: () => addNode(OperationType.NODE_SELECT) },
                 { key: OperationType.SCREENSHOT, label: '页面截取', onClick: () => addNode(OperationType.SCREENSHOT) },
@@ -703,15 +751,18 @@ export default function WorkflowEditor() {
             title="节点配置"
             style={{ flex: 1, maxWidth: '500px', overflow: 'auto' }}
             extra={
-              <Button
-                type="text"
-                danger
-                icon={<DeleteOutlined />}
-                onClick={() => removeNode(selectedNode)}
-                size="small"
-              >
-                删除
-              </Button>
+              config.nodes.find(n => n.id === selectedNode)?.type !== OperationType.START &&
+              config.nodes.find(n => n.id === selectedNode)?.type !== OperationType.END && (
+                <Button
+                  type="text"
+                  danger
+                  icon={<DeleteOutlined />}
+                  onClick={() => removeNode(selectedNode)}
+                  size="small"
+                >
+                  删除
+                </Button>
+              )
             }
           >
             <NodeConfigPanel
@@ -768,6 +819,10 @@ export default function WorkflowEditor() {
 
 function getDefaultParams(type: OperationType): Record<string, any> {
   switch (type) {
+    case OperationType.START:
+      return {}
+    case OperationType.END:
+      return { output: '' }
     case OperationType.OPEN_PAGE:
       return { url: '' }
     case OperationType.CLICK:
@@ -787,6 +842,8 @@ function getDefaultParams(type: OperationType): Record<string, any> {
       return { filename: '', screenshotType: 'fullpage' }
     case OperationType.AI_TASK:
       return { taskDescription: '', timeout: 60 }
+    case OperationType.WAIT:
+      return { duration: 3000 }
     default:
       return {}
   }
@@ -794,6 +851,8 @@ function getDefaultParams(type: OperationType): Record<string, any> {
 
 function getTypeLabel(type: OperationType): string {
   const labels: Record<OperationType, string> = {
+    [OperationType.START]: '开始',
+    [OperationType.END]: '结束',
     [OperationType.CONDITION]: '条件判断',
     [OperationType.CLICK]: '点击元素',
     [OperationType.OPEN_PAGE]: '打开页面',
