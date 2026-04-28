@@ -16,3 +16,4 @@
 [2026-04-27 23:00:28] [INFO] Stagehand 已关闭 
 [2026-04-27 23:04:50] [ERROR] 测试执行失败 Invalid state: Controller is already closed {"code":"ERR_INVALID_STATE","stack":"TypeError: Invalid state: Controller is already closed\n    at ReadableStreamDefaultController.enqueue (node:internal/webstreams/readablestream:1077:13)\n    at sendLog (D:\\File\\前端自建项目\\my-stageHande\\.next\\dev\\server\\chunks\\[root-of-the-server]__05g96g5._.js:2206:28)\n    at Object.start (D:\\File\\前端自建项目\\my-stageHande\\.next\\dev\\server\\chunks\\[root-of-the-server]__05g96g5._.js:2256:21)"}
 [2026-04-27 23:04:50] [INFO] Stagehand 已关闭 
+[2026-04-28 19:04:45] [INFO] Stagehand 已关闭 

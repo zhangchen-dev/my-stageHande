@@ -212,3 +212,17 @@ export interface ExecuteTaskResponse {
   resultId: string
   streamUrl?: string // SSE 流地址
 }
+
+// ==================== 批量任务类型 ====================
+
+export type {
+  BatchTaskStatusType,
+  BatchTaskStatus,
+  BatchExecuteRequest,
+  BatchExecuteResponse,
+  BatchTaskProgress,
+  BatchExecutionLog,
+  BatchExecutionSummary,
+  TaskLogInfo,
+  RunningTaskInfo,
+} from './batch-task'

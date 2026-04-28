@@ -2,7 +2,8 @@
 
 import { useState, useRef, useEffect, useCallback, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
-import { Layout, Button, Space, Card, Typography, Tag, message, Modal, Empty, Spin, Badge, Progress, Alert, Radio } from 'antd'
+import { Layout, Button, Space, Card, Typography, Tag, message, Modal, Empty, Spin, Badge, Progress, Alert, Radio, Checkbox, Table, Tooltip, Dropdown } from 'antd'
+import type { ColumnsType } from 'antd/es/table'
 import {
   PlayCircleOutlined,
   StopOutlined,
@@ -14,6 +15,12 @@ import {
   ClearOutlined,
   FileTextOutlined,
   ReloadOutlined,
+  EyeOutlined,
+  CopyOutlined,
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  ClockCircleOutlined,
+  FileAddOutlined,
 } from '@ant-design/icons'
 import { useDatabase } from '@/hooks/useDatabase'
 import {
@@ -22,6 +29,8 @@ import {
   LogEntry,
   ExecutionStrategy,
   TestResult,
+  TaskLogInfo,
+  RunningTaskInfo,
 } from '@/types'
 import { STATUS_COLORS, STATUS_LABELS } from '@/app/constants'
 import { convertWorkflowConfigToSteps } from '@/app/utils/workflow-converter'
@@ -75,6 +84,13 @@ function HomePageContent() {
   const [showLogManagement, setShowLogManagement] = useState(false)
   const [selectedTaskIdForLogs, setSelectedTaskIdForLogs] = useState<string | undefined>()
 
+  const [runningTasks, setRunningTasks] = useState<Map<string, RunningTaskInfo>>(new Map())
+  const [taskLogs, setTaskLogs] = useState<Map<string, LogEntry[]>>(new Map())
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(null)
+  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set())
+  const [maxConcurrency, setMaxConcurrency] = useState<number>(3)
+  const [batchAbortController, setBatchAbortController] = useState<AbortController | null>(null)
+
   const taskRef = useRef<TestTask | null>(null)
   const isStartingRef = useRef(false)
   const isStoppedRef = useRef(false)
@@ -90,6 +106,41 @@ function HomePageContent() {
     logsRef.current = []
     setLogs([])
   }, [])
+
+  const addLogToTask = useCallback((taskId: string, log: LogEntry) => {
+    setTaskLogs(prev => {
+      const newMap = new Map(prev)
+      const taskLogs = newMap.get(taskId) || []
+      newMap.set(taskId, [...taskLogs, log])
+      return newMap
+    })
+  }, [])
+
+  const clearTaskLogs = useCallback((taskId: string) => {
+    setTaskLogs(prev => {
+      const newMap = new Map(prev)
+      newMap.set(taskId, [])
+      return newMap
+    })
+  }, [])
+
+  const clearAllTaskLogs = useCallback(() => {
+    setTaskLogs(new Map())
+  }, [])
+
+  const getTaskLogInfo = useCallback((taskId: string): TaskLogInfo | undefined => {
+    const task = tasks.find(t => t.id === taskId)
+    const runningTask = runningTasks.get(taskId)
+    const logs = taskLogs.get(taskId) || []
+    
+    if (!task) return undefined
+    
+    return {
+      taskName: task.name,
+      status: runningTask?.status || 'pending',
+      logs,
+    }
+  }, [tasks, runningTasks, taskLogs])
 
   useEffect(() => {
     const runWorkflowTask = async () => {
@@ -554,6 +605,193 @@ function HomePageContent() {
     })
   }
 
+  const handleBatchExecute = () => {
+    if (selectedTaskIds.size === 0) {
+      message.warning('请先选择要执行的任务')
+      return
+    }
+
+    if (runningTasks.size > 0) {
+      message.warning('已有任务正在执行中，请先终止当前任务')
+      return
+    }
+
+    let selectedHeadful = false
+    let selectedConcurrency = maxConcurrency
+
+    Modal.confirm({
+      title: '批量执行任务',
+      icon: <PlayCircleOutlined style={{ color: '#1890ff' }} />,
+      content: (
+        <div style={{ marginTop: 16 }}>
+          <p style={{ marginBottom: 12 }}>已选择 {selectedTaskIds.size} 个任务</p>
+          <div style={{ marginBottom: 16 }}>
+            <p style={{ marginBottom: 8 }}>浏览器模式：</p>
+            <Radio.Group
+              defaultValue={false}
+              onChange={(e) => { selectedHeadful = e.target.value }}
+              style={{ width: '100%' }}
+            >
+              <div style={{ marginBottom: 8 }}>
+                <Radio value={false}>
+                  <span style={{ fontWeight: 500 }}>无头模式</span>
+                </Radio>
+              </div>
+              <div>
+                <Radio value={true}>
+                  <span style={{ fontWeight: 500 }}>有头模式</span>
+                </Radio>
+              </div>
+            </Radio.Group>
+          </div>
+        </div>
+      ),
+      okText: '开始执行',
+      cancelText: '取消',
+      width: 480,
+      onOk: () => {
+        startBatchTest(Array.from(selectedTaskIds), selectedHeadful, selectedConcurrency)
+      },
+    })
+  }
+
+  const startBatchTest = async (taskIds: string[], headful: boolean, concurrency: number) => {
+    const tasksToRun = tasks.filter(t => taskIds.includes(t.id))
+    
+    if (tasksToRun.length === 0) {
+      message.warning('没有可执行的任务')
+      return
+    }
+
+    const batchId = `batch_${Date.now()}`
+    console.log(`[批量执行] 启动批量任务，批次ID: ${batchId}，任务数: ${tasksToRun.length}`)
+
+    clearAllTaskLogs()
+    setRunningTasks(new Map())
+    setActiveTaskId(null)
+
+    const controller = new AbortController()
+    setBatchAbortController(controller)
+
+    const newRunningTasks = new Map<string, RunningTaskInfo>()
+    for (const task of tasksToRun) {
+      const testId = `test_${task.id}_${Date.now()}`
+      newRunningTasks.set(task.id, {
+        taskId: task.id,
+        testId,
+        taskName: task.name,
+        status: 'running',
+        progress: 0,
+        startTime: new Date().toISOString(),
+      })
+      setTaskLogs(prev => {
+        const newMap = new Map(prev)
+        newMap.set(task.id, [])
+        return newMap
+      })
+    }
+    setRunningTasks(newRunningTasks)
+
+    if (tasksToRun.length > 0) {
+      setActiveTaskId(tasksToRun[0].id)
+    }
+
+    try {
+      const tasksData = tasksToRun.map(task => {
+        let steps = task.steps
+        if ((task as any).workflowConfig) {
+          steps = convertWorkflowConfigToSteps((task as any).workflowConfig)
+        }
+        return {
+          taskId: task.id,
+          taskName: task.name,
+          steps,
+          useHeadful: headful,
+          strategy: defaultStrategy,
+          stepInterval: task.stepInterval,
+        }
+      })
+
+      const response = await fetch('/api/test/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tasks: tasksData,
+          maxConcurrency: concurrency,
+        }),
+        signal: controller.signal,
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+
+      if (!response.body) throw new Error('无法获取响应流')
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        const chunk = decoder.decode(value, { stream: true })
+        const lines = chunk.split('\n\n').filter(line => line.trim())
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6))
+              
+              if (data.type === 'task_log') {
+                const taskId = Object.entries(newRunningTasks).find(
+                  ([_, info]) => info.testId === data.testId
+                )?.[0]
+                
+                if (taskId) {
+                  const log: LogEntry = {
+                    timestamp: data.timestamp,
+                    level: data.level,
+                    message: data.message,
+                    screenshot: data.screenshot,
+                    stepId: data.stepId,
+                    details: data.details,
+                  }
+                  addLogToTask(taskId, log)
+                }
+              } else if (data.type === 'task_complete') {
+                setRunningTasks(prev => {
+                  const newMap = new Map(prev)
+                  const task = newMap.get(data.taskId)
+                  if (task) {
+                    task.status = data.success ? 'success' : 'failed'
+                    task.progress = 100
+                  }
+                  return newMap
+                })
+              } else if (data.type === 'batch_complete') {
+                message.success('批量任务执行完成')
+              }
+            } catch (e) {
+              console.error('解析日志失败:', e)
+            }
+          }
+        }
+      }
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.log('[批量执行] 任务被中止')
+      } else {
+        const errorMessage = error instanceof Error ? error.message : '未知错误'
+        message.error('批量执行失败: ' + errorMessage)
+      }
+    } finally {
+      setRunningTasks(new Map())
+      setBatchAbortController(null)
+      setSelectedTaskIds(new Set())
+    }
+  }
+
   const startTest = async (task: TestTask, headful?: boolean) => {
     const actualUseHeadful = headful !== undefined ? headful : useHeadful
     
@@ -887,6 +1125,197 @@ function HomePageContent() {
 
   const runningTask = runningTaskId ? tasks.find(t => t.id === runningTaskId) : null
 
+  const taskColumns: ColumnsType<TestTask> = [
+    {
+      title: '任务名称',
+      dataIndex: 'name',
+      key: 'name',
+      width: 200,
+      ellipsis: true,
+      render: (text: string, record: TestTask) => (
+        <Space>
+          <Tooltip title={text}>
+            <span style={{ fontWeight: 500 }}>{text}</span>
+          </Tooltip>
+          {record.tags && record.tags.length > 0 && (
+            <Space size={4}>
+              {record.tags.slice(0, 2).map((tag, index) => (
+                <Tag key={index} style={{ fontSize: 11 }}>{tag}</Tag>
+              ))}
+              {record.tags.length > 2 && <Tag style={{ fontSize: 11 }}>+{record.tags.length - 2}</Tag>}
+            </Space>
+          )}
+        </Space>
+      ),
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 100,
+      render: (status: string, record: TestTask) => {
+        const isRunning = runningTaskId === record.id || runningTasks.has(record.id)
+        const isTerminated = terminatedTaskId === record.id
+        
+        if (isRunning) {
+          return <Badge status="processing" text="运行中" />
+        }
+        if (isTerminated) {
+          return <Badge status="warning" text="已终止" />
+        }
+        
+        const statusConfig: Record<string, { color: string; icon: React.ReactNode }> = {
+          draft: { color: 'default', icon: <ClockCircleOutlined /> },
+          ready: { color: 'blue', icon: <CheckCircleOutlined /> },
+          completed: { color: 'success', icon: <CheckCircleOutlined /> },
+          failed: { color: 'error', icon: <CloseCircleOutlined /> },
+        }
+        
+        const config = statusConfig[status] || statusConfig.draft
+        return <Tag color={config.color} icon={config.icon}>{STATUS_LABELS[status as keyof typeof STATUS_LABELS] || status}</Tag>
+      },
+    },
+    {
+      title: '步骤数',
+      dataIndex: 'steps',
+      key: 'steps',
+      width: 80,
+      align: 'center',
+      render: (steps: TestStep[]) => steps?.length || 0,
+    },
+    {
+      title: '创建时间',
+      dataIndex: 'createdAt',
+      key: 'createdAt',
+      width: 160,
+      render: (date: string) => new Date(date).toLocaleString('zh-CN', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+      }),
+    },
+    {
+      title: '最新结果',
+      key: 'latestResult',
+      width: 100,
+      render: (_: any, record: TestTask) => {
+        const result = getLatestResult(record.id)
+        if (!result) return <span style={{ color: '#999' }}>-</span>
+        
+        const statusConfig: Record<string, { color: string; text: string }> = {
+          success: { color: '#52c41a', text: '成功' },
+          failed: { color: '#ff4d4f', text: '失败' },
+          partial: { color: '#faad14', text: '部分成功' },
+        }
+        
+        const config = statusConfig[result.status] || statusConfig.failed
+        return (
+          <Tooltip title={`${result.passedSteps}/${result.totalSteps} 步骤通过`}>
+            <span style={{ color: config.color }}>{config.text}</span>
+          </Tooltip>
+        )
+      },
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 280,
+      fixed: 'right',
+      render: (_: any, record: TestTask) => {
+        const isRunning = runningTaskId === record.id || runningTasks.has(record.id)
+        const isDisabled = !!runningTaskId || runningTasks.size > 0
+        
+        return (
+          <Space size={4}>
+            {isRunning ? (
+              <Button
+                type="primary"
+                danger
+                size="small"
+                icon={<StopOutlined />}
+                onClick={stopTest}
+              >
+                终止
+              </Button>
+            ) : (
+              <Button
+                type="primary"
+                size="small"
+                icon={<PlayCircleOutlined />}
+                onClick={() => handleRunTask(record)}
+                disabled={isDisabled}
+              >
+                执行
+              </Button>
+            )}
+            <Button
+              size="small"
+              icon={<EditOutlined />}
+              onClick={() => {
+                const params = new URLSearchParams()
+                params.set('taskId', record.id)
+                router.push(`/workflow?${params.toString()}`)
+              }}
+              disabled={isDisabled}
+            >
+              编辑
+            </Button>
+            <Button
+              size="small"
+              icon={<EyeOutlined />}
+              onClick={() => handleViewLogs(record.id)}
+            >
+              日志
+            </Button>
+            <Dropdown
+              menu={{
+                items: [
+                  {
+                    key: 'export',
+                    icon: <ExportOutlined />,
+                    label: '导出任务',
+                    onClick: () => handleExportTask(record),
+                  },
+                  {
+                    key: 'template',
+                    icon: <FileAddOutlined />,
+                    label: '保存为模板',
+                    onClick: () => saveTaskAsTemplate(record),
+                  },
+                  {
+                    key: 'result',
+                    icon: <EyeOutlined />,
+                    label: '查看结果',
+                    onClick: () => {
+                      const result = getLatestResult(record.id)
+                      if (result) handleViewResult(result)
+                      else message.info('暂无执行结果')
+                    },
+                  },
+                  { type: 'divider' },
+                  {
+                    key: 'delete',
+                    icon: <DeleteOutlined />,
+                    label: '删除任务',
+                    danger: true,
+                    onClick: () => handleDeleteTask(record.id),
+                  },
+                ],
+              }}
+              trigger={['click']}
+            >
+              <Button size="small">更多</Button>
+            </Dropdown>
+          </Space>
+        )
+      },
+    },
+  ]
+
+  const taskTableData = tasks.map(task => ({ ...task, key: task.id }))
+
   return (
     <Layout style={{ minHeight: '100vh' }}>
       <Header style={{
@@ -903,41 +1332,73 @@ function HomePageContent() {
           {runningTask && (
             <Badge status="processing" text={<span style={{ color: '#fff' }}>执行中: {runningTask.name}</span>} />
           )}
+          {runningTasks.size > 0 && (
+            <Badge status="processing" text={<span style={{ color: '#fff' }}>批量执行中: {runningTasks.size} 个任务</span>} />
+          )}
         </Space>
         <Space>
+          {selectedTaskIds.size > 0 && (
+            <Button
+              type="primary"
+              icon={<PlayCircleOutlined />}
+              onClick={handleBatchExecute}
+              disabled={runningTasks.size > 0 || !!runningTaskId}
+            >
+              批量执行 ({selectedTaskIds.size})
+            </Button>
+          )}
+          {runningTasks.size > 0 && (
+            <Button
+              type="primary"
+              danger
+              icon={<StopOutlined />}
+              onClick={() => {
+                if (batchAbortController) {
+                  batchAbortController.abort()
+                  fetch('/api/test/batch', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ reason: '用户终止' }),
+                  })
+                }
+              }}
+            >
+              终止全部
+            </Button>
+          )}
           <Button
             type="primary"
             icon={<PlusOutlined />}
             onClick={() => setShowNewTaskModal(true)}
-            disabled={!!runningTaskId}
+            disabled={!!runningTaskId || runningTasks.size > 0}
           >
             新建任务
           </Button>
           <Button
             icon={<ImportOutlined />}
             onClick={handleImportJsonTask}
-            disabled={!!runningTaskId}
+            disabled={!!runningTaskId || runningTasks.size > 0}
           >
             导入JSON
           </Button>
           <Button
             icon={<ImportOutlined />}
             onClick={initAllPresetTasks}
-            disabled={!!runningTaskId}
+            disabled={!!runningTaskId || runningTasks.size > 0}
           >
             初始化预设
           </Button>
           <Button
             icon={<ExportOutlined />}
             onClick={handleExportAllTasks}
-            disabled={tasks.length === 0 || !!runningTaskId}
+            disabled={tasks.length === 0 || !!runningTaskId || runningTasks.size > 0}
           >
             导出全部
           </Button>
           <Button
             icon={<ReloadOutlined />}
             onClick={() => window.location.reload()}
-            disabled={!!runningTaskId}
+            disabled={!!runningTaskId || runningTasks.size > 0}
           >
             刷新
           </Button>
@@ -967,7 +1428,20 @@ function HomePageContent() {
               <Space>
                 <FileTextOutlined />
                 <span>任务列表 ({tasks.length})</span>
+                {selectedTaskIds.size > 0 && (
+                  <Tag color="blue">已选择 {selectedTaskIds.size} 个</Tag>
+                )}
               </Space>
+            }
+            extra={
+              selectedTaskIds.size > 0 ? (
+                <Button
+                  size="small"
+                  onClick={() => setSelectedTaskIds(new Set())}
+                >
+                  取消选择
+                </Button>
+              ) : null
             }
             style={{ marginBottom: 16 }}
           >
@@ -987,37 +1461,27 @@ function HomePageContent() {
                 </Space>
               </Empty>
             ) : (
-              <div style={{ 
-                display: 'grid', 
-                gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', 
-                gap: 16,
-                maxHeight: 'calc(100vh - 300px)',
-                overflowY: 'auto',
-                padding: 4,
-              }}>
-                {tasks.map(task => (
-                  <TaskCard
-                    key={task.id}
-                    task={task}
-                    isRunning={runningTaskId === task.id}
-                    isTerminated={terminatedTaskId === task.id}
-                    latestResult={getLatestResult(task.id)}
-                    onRun={() => handleRunTask(task)}
-                    onStop={stopTest}
-                    onEdit={() => {
-                      const params = new URLSearchParams()
-                      params.set('taskId', task.id)
-                      router.push(`/workflow?${params.toString()}`)
-                    }}
-                    onDelete={() => handleDeleteTask(task.id)}
-                    onViewResult={handleViewResult}
-                    onSaveAsTemplate={() => saveTaskAsTemplate(task)}
-                    onExportTask={() => handleExportTask(task)}
-                    onViewLogs={() => handleViewLogs(task.id)}
-                    isDisabled={!!runningTaskId && runningTaskId !== task.id}
-                  />
-                ))}
-              </div>
+              <Table
+                columns={taskColumns}
+                dataSource={taskTableData}
+                pagination={{
+                  pageSize: 10,
+                  showSizeChanger: true,
+                  showQuickJumper: true,
+                  showTotal: (total) => `共 ${total} 个任务`,
+                }}
+                rowSelection={{
+                  selectedRowKeys: Array.from(selectedTaskIds),
+                  onChange: (selectedRowKeys) => {
+                    setSelectedTaskIds(new Set(selectedRowKeys as string[]))
+                  },
+                  getCheckboxProps: () => ({
+                    disabled: !!runningTaskId || runningTasks.size > 0,
+                  }),
+                }}
+                scroll={{ x: 1000 }}
+                size="small"
+              />
             )}
           </Card>
         </Content>
@@ -1025,9 +1489,26 @@ function HomePageContent() {
         <Sider width={450} style={{ background: '#fff', padding: '16px', borderLeft: '1px solid #f0f0f0' }}>
           <LogPanel 
             logs={logs} 
-            isRunning={!!runningTaskId} 
-            onClear={clearLogs}
+            isRunning={!!runningTaskId || runningTasks.size > 0} 
+            onClear={runningTasks.size > 0 ? clearAllTaskLogs : clearLogs}
             taskName={runningTask?.name}
+            taskLogs={runningTasks.size > 0 ? (() => {
+              const map = new Map<string, TaskLogInfo>()
+              for (const [taskId, info] of runningTasks) {
+                const task = tasks.find(t => t.id === taskId)
+                if (task) {
+                  map.set(taskId, {
+                    taskName: info.taskName,
+                    status: info.status,
+                    logs: taskLogs.get(taskId) || [],
+                  })
+                }
+              }
+              return map
+            })() : undefined}
+            activeTaskId={activeTaskId}
+            onTabChange={setActiveTaskId}
+            onClearTaskLog={clearTaskLogs}
           />
         </Sider>
       </Layout>
